@@ -7,10 +7,10 @@ from setuptools import setup, find_packages
 
 setup(
     name = 'near_optimal',
-    version = '0.0.0',
+    version = '0.1.1',
     url = 'https://github.com/ThomasLastName/python-package-template',
     author = 'Thomas Winckelman',
     author_email = 'winckelman@tamu.edu',
     description = 'Code for "optimal recovery for neural networks"',
     packages = find_packages(),
-    install_requires = ["requests","cvxpy"])
+    install_requires = ["requests","cvxpy","quality_of_life @ git+https://github.com/ThomasLastName/quality-of-life.git"])

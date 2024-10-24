@@ -4,6 +4,7 @@ from torch import nn
 from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
 from quality_of_life.my_plt_utils import points_with_curves
+from quality_of_life.my_base_utils import support_for_progress_bars
 
 class spline(nn.Module):
     def __init__( self, x ):
@@ -43,11 +44,11 @@ class spline(nn.Module):
             j += 1
             a[j-1] = (self.z[2*j-1] + self.z[2*j-1-1]) / 2              # ~~~ (z_{2j} + z_{2j-1}) / 2
             s[j-1] = (self.z[2*j-1] - self.z[2*j-1-1]) / self.d[j-1]    # ~~~ (z_{2j} - z_{2j-1}) / (x_{2j} - x_{2j-1})
-        second_derivative = s.diff()    # ~~~ j-th component is (s[j+1] - s[j])
         # for j in range(self.k-1):
         #     foo[j] = s[j+1]*self.m[j+1] - s[j]*self.m[j] - (a[j+1] - a[j]) - second_derivative[j]*self.c[j] # ~~~ "x" + (s_{j+1}-x_j)*c_j
+        second_derivative = s.diff()    # ~~~ j-th component is (s[j+1] - s[j])
         violator = (s*self.m).diff() - a.diff() - second_derivative*self.c
-        return self.D/2 * second_derivative - violator.abs()
+        return self.D/2 * second_derivative.abs() - violator.abs()
     #
     # ~~~ Compute the points at which the neighboring lines intersect
     def compute_break_points( self ):
@@ -79,6 +80,7 @@ class spline(nn.Module):
             s[j-1] = (self.z[2*j-1] - self.z[2*j-1-1]) / self.d[j-1]    # ~~~ (z_{2j} - z_{2j-1}) / (x_{2j} - x_{2j-1})
         return a[indices] + s[indices] * (x - self.m[indices])
 
+torch.manual_seed(2024)
 k = 15
 m =  2*k
 f = lambda x: torch.sin(2*torch.pi*x)
@@ -89,23 +91,24 @@ x_test = torch.linspace(-1,1,1001)
 y_test = f(x_test)
 # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
 
-penalty_coefficient = .01
+penalty_coefficient = .5
 penalty_fn = lambda x: torch.clamp(-x,min=0).max()  # ~~~ returns zero if x\geq0, else returns something positive
 lr = 1e-2
-N = 15000
+N = 1000
 optimizer = torch.optim.Adam( v.parameters(), lr=lr )
 history = []
 pbar = tqdm( desc="Using Gradient Descent", total=N, ascii=' >=' )
-for _ in range(N):
-    should_be_nonnegative = v.compute_violation()
-    max_error = (y_train-v.z).abs().max()
-    loss = max_error + penalty_coefficient*penalty_fn(should_be_nonnegative)
-    loss.backward()
-    optimizer.step()
-    optimizer.zero_grad()
-    _ = pbar.update()
-    history.append(max_error.item())
-    pbar.set_postfix({ "max_error" : f"{history[-1]:<4.4f}" })
+with support_for_progress_bars():
+    for _ in range(N):
+        should_be_nonnegative = v.compute_violation()
+        max_error = (y_train-v.z).abs().max()
+        loss = max_error + penalty_coefficient*penalty_fn(should_be_nonnegative)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        _ = pbar.update()
+        history.append(max_error.item())
+        pbar.set_postfix({ "max_error" : f"{history[-1]:<4.4f}" })
 
 pbar.close()
 
@@ -115,3 +118,4 @@ with torch.no_grad():
     ax.scatter( nodes, v(nodes) )
     plt.show()
 
+print(should_be_nonnegative)
