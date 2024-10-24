@@ -7,8 +7,8 @@ from setuptools import setup, find_packages
 
 setup(
     name = 'near_optimal',
-    version = '0.1.1',
-    url = 'https://github.com/ThomasLastName/python-package-template',
+    version = '0.1.2',
+    url = 'https://github.com/ThomasLastName/near-optimal',
     author = 'Thomas Winckelman',
     author_email = 'winckelman@tamu.edu',
     description = 'Code for "optimal recovery for neural networks"',
