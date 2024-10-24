@@ -89,7 +89,7 @@ x_test = torch.linspace(-1,1,1001)
 y_test = f(x_test)
 # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
 
-penalty_coefficient = 10.
+penalty_coefficient = .01
 penalty_fn = lambda x: torch.clamp(-x,min=0).max()  # ~~~ returns zero if x\geq0, else returns something positive
 lr = 1e-2
 N = 15000
@@ -109,4 +109,9 @@ for _ in range(N):
 
 pbar.close()
 
-points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
+fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), show=False )
+with torch.no_grad():
+    nodes = v.compute_break_points()
+    ax.scatter( nodes, v(nodes) )
+    plt.show()
+
