@@ -1,5 +1,15 @@
 
 import torch
+from torch import nn
+from near_optimal.gradient_univar import spline
+import cvxpy as cp
+import numpy as np
+from tqdm.auto import tqdm
+from matplotlib import pyplot as plt
+from quality_of_life.my_plt_utils import points_with_curves
+from quality_of_life.my_base_utils import support_for_progress_bars
+
+
 
 ### ~~~
 ## ~~~ Compute the vectors a_j and b_j for which we demand the constraint |a_j^Tz| \leq |b_j^Tz|
@@ -65,17 +75,71 @@ def build_a_j(x,j):
     a_j[2*j-1-1] = a_2jm1   # ~~~ a^{(j)}_{2j-1}
     return a_j
 
+class dual_spline(spline):
+    def __init__( self, x, y, eps=1e-6 ):
+        super().__init__(x)
+        self.y = y
+        self.lamb = torch.randn(k-1).to( device=x.device, dtype=x.dtype )**2
+        self.a = torch.stack( [ build_a_j(x,j) for j in range(k-1) ] )
+        self.b = torch.stack( [ build_b_j(x,j) for j in range(k-1) ] )
+        self.bbt_minus_aat = torch.stack([ torch.outer(self.b[j],self.b[j]) - torch.outer(self.a[j],self.a[j]) for j in range(k-1) ])
+        self.t = 0  # ~~~ iterations completed thus far of the Frank-Wolfe algorithm
+        self.eps = eps
+    #
+    # ~~~ 
+    def frank_wolfe_step(self):
+        #
+        # ~~~ Compute the gradient of F(\lambda)
+        self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
+        z = torch.linalg.solve( self.Q, self.y )
+        g = ((self.a@z).abs() - (self.b@z).abs()).cpu().numpy()   # ~~~ \grad_\lambda F(\lambda)
+        self.z.data = z
+        #
+        # ~~~ Solve the Frank-Wolfe subproblem to find a better update direction than the gradient
+        v = cp.Variable( self.k-1, nonneg=True )
+        objective = cp.Maximize( g@v )
+        bbt_minus_aat = self.bbt_minus_aat.cpu().numpy()
+        R = sum(v[i] * bbt_minus_aat[i] for i in range(14))
+        constraints = [ R << (1-self.eps)*np.eye(2*self.k) ]
+        problem = cp.Problem(objective, constraints)
+        problem.solve()
+        alpha = 2/(self.t+2)
+        self.lamb = (1-alpha)*self.lamb + alpha*torch.from_numpy(v.value).to( device=self.lamb.device, dtype=self.lamb.dtype )
+        self.t += 1
 
 if __name__ == "__main__":
     #
     # ~~~ Config
     torch.manual_seed(2024)
+    torch.set_default_dtype(torch.double)
     k = 15
     m =  2*k
-    f = lambda x: torch.sin(2*torch.pi*x)
+    f = lambda x: torch.sin(2*torch.pi*x)*torch.exp(2*x.abs())
     x_train = torch.linspace(-1,1,m)
     y_train = f(x_train)
-    v = spline(x_train)
+    v = dual_spline( x_train, y_train )
     x_test = torch.linspace(-1,1,1001)
     y_test = f(x_test)
     # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
+    N = 10
+    with support_for_progress_bars():
+        pbar = tqdm( desc="Solving the Dual Problem Using Frank-Wolfe", total=N, ascii=' >=' )
+        for _ in range(N):
+            v.frank_wolfe_step()
+            _ = pbar.update()
+            with torch.no_grad():
+                errors = v(x_train) - y_train
+                mse = (errors**2).mean()
+                max_error = errors.abs().max()
+                pbar.set_postfix({
+                        "mse" : f"{mse:<4.4f}",
+                        "max_error" : f"{max_error:<4.4f}"
+                    })
+    pbar.close()
+    fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), show=False, title="MSE Minimization with Hard Constraints" )
+    with torch.no_grad():
+        nodes = v.compute_break_points()
+        ax.scatter( nodes, v(nodes) )
+        plt.show()
+    print(v.compute_violation())
+
