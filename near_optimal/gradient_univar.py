@@ -7,7 +7,7 @@ from quality_of_life.my_plt_utils import points_with_curves
 from quality_of_life.my_base_utils import support_for_progress_bars
 
 class spline(nn.Module):
-    def __init__( self, x, y ):
+    def __init__( self, x, y=None ):
         super().__init__()
         x = x.squeeze()
         assert x.dim()==1
