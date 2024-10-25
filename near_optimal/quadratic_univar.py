@@ -121,7 +121,7 @@ if __name__ == "__main__":
     x_test = torch.linspace(-1,1,1001)
     y_test = f(x_test)
     # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
-    N = 30
+    N = 10
     best_error = float("inf")
     with support_for_progress_bars():
         pbar = tqdm( desc="Solving the Dual Problem Using Frank-Wolfe", total=N, ascii=' >=' )
