@@ -13,4 +13,7 @@ setup(
     author_email = 'winckelman@tamu.edu',
     description = 'Code for "optimal recovery for neural networks"',
     packages = find_packages(),
-    install_requires = ["requests","cvxpy","quality_of_life @ git+https://github.com/ThomasLastName/quality-of-life.git"])
+    install_requires = [
+            "cvxpy",
+            "quality_of_life @ git+https://github.com/ThomasLastName/quality-of-life.git"
+        ])
