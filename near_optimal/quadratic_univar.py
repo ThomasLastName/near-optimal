@@ -114,14 +114,15 @@ if __name__ == "__main__":
     torch.set_default_dtype(torch.double)
     k = 15
     m =  2*k
-    f = lambda x: torch.sin(2*torch.pi*x)*torch.exp(2*x.abs())
+    f = lambda x: torch.sin(2*torch.pi*x)
     x_train = torch.linspace(-1,1,m)
     y_train = f(x_train)
     v = dual_spline( x_train, y_train )
     x_test = torch.linspace(-1,1,1001)
     y_test = f(x_test)
     # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
-    N = 10
+    N = 30
+    best_error = float("inf")
     with support_for_progress_bars():
         pbar = tqdm( desc="Solving the Dual Problem Using Frank-Wolfe", total=N, ascii=' >=' )
         for _ in range(N):
@@ -135,7 +136,11 @@ if __name__ == "__main__":
                         "mse" : f"{mse:<4.4f}",
                         "max_error" : f"{max_error:<4.4f}"
                     })
+                if max_error < best_error:
+                    best_error = max_error
+                    best_z = v.z.data.clone()
     pbar.close()
+    v.z.data = best_z
     fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), show=False, title="MSE Minimization with Hard Constraints" )
     with torch.no_grad():
         nodes = v.compute_break_points()
