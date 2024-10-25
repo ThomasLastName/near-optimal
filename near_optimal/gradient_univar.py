@@ -104,9 +104,9 @@ if __name__ == "__main__":
     with support_for_progress_bars():
         pbar = tqdm( desc="Using Gradient Descent", total=N, ascii=' >=' )
         for _ in range(N):
-            should_be_nonnegative = v.compute_violation()
+            should_be_geq_1 = v.compute_violation()
             max_error = (y_train-v.z).abs().max()
-            loss = max_error + penalty_coefficient*penalty_fn(should_be_nonnegative)
+            loss = max_error + penalty_coefficient*penalty_fn(should_be_geq_1)
             loss.backward()
             optimizer.step()
             optimizer.zero_grad()
