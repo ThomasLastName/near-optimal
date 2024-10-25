@@ -80,42 +80,43 @@ class spline(nn.Module):
             s[j-1] = (self.z[2*j-1] - self.z[2*j-1-1]) / self.d[j-1]    # ~~~ (z_{2j} - z_{2j-1}) / (x_{2j} - x_{2j-1})
         return a[indices] + s[indices] * (x - self.m[indices])
 
-torch.manual_seed(2024)
-k = 15
-m =  2*k
-f = lambda x: torch.sin(2*torch.pi*x)
-x_train = torch.linspace(-1,1,m)
-y_train = f(x_train)
-v = spline(x_train)
-x_test = torch.linspace(-1,1,1001)
-y_test = f(x_test)
-# points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
-
-penalty_coefficient = .5
-penalty_fn = lambda x: torch.clamp(-x,min=0).max()  # ~~~ returns zero if x\geq0, else returns something positive
-lr = 1e-2
-N = 1000
-optimizer = torch.optim.Adam( v.parameters(), lr=lr )
-history = []
-pbar = tqdm( desc="Using Gradient Descent", total=N, ascii=' >=' )
-with support_for_progress_bars():
-    for _ in range(N):
-        should_be_nonnegative = v.compute_violation()
-        max_error = (y_train-v.z).abs().max()
-        loss = max_error + penalty_coefficient*penalty_fn(should_be_nonnegative)
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-        _ = pbar.update()
-        history.append(max_error.item())
-        pbar.set_postfix({ "max_error" : f"{history[-1]:<4.4f}" })
-
-pbar.close()
-
-fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), show=False )
-with torch.no_grad():
-    nodes = v.compute_break_points()
-    ax.scatter( nodes, v(nodes) )
-    plt.show()
-
-print(should_be_nonnegative)
+if __name__ == "__main__":
+    #
+    # ~~~ Config
+    torch.manual_seed(2024)
+    k = 15
+    m =  2*k
+    f = lambda x: torch.sin(2*torch.pi*x)
+    x_train = torch.linspace(-1,1,m)
+    y_train = f(x_train)
+    v = spline(x_train)
+    x_test = torch.linspace(-1,1,1001)
+    y_test = f(x_test)
+    # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
+    penalty_coefficient = .5
+    penalty_fn = lambda x: torch.clamp(-x,min=0).max()  # ~~~ returns zero if x\geq0, else returns something positive
+    lr = 1e-2
+    N = 1000
+    optimizer = torch.optim.Adam( v.parameters(), lr=lr )
+    #
+    # ~~~ Gradient Descent
+    history = []
+    with support_for_progress_bars():
+        pbar = tqdm( desc="Using Gradient Descent", total=N, ascii=' >=' )
+        for _ in range(N):
+            should_be_nonnegative = v.compute_violation()
+            max_error = (y_train-v.z).abs().max()
+            loss = max_error + penalty_coefficient*penalty_fn(should_be_nonnegative)
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            _ = pbar.update()
+            history.append(max_error.item())
+            pbar.set_postfix({ "max_error" : f"{history[-1]:<4.4f}" })
+    pbar.close()
+    fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), show=False )
+    with torch.no_grad():
+        nodes = v.compute_break_points()
+        ax.scatter( nodes, v(nodes) )
+        plt.show()
+    print(should_be_nonnegative)
