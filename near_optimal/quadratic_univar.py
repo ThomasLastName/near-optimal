@@ -139,7 +139,7 @@ if __name__ == "__main__":
     fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), show=False, title="MSE Minimization with Hard Constraints" )
     with torch.no_grad():
         nodes = v.compute_break_points()
-        ax.scatter( nodes, v(nodes) )
+        ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
         plt.show()
     print(v.compute_violation())
 

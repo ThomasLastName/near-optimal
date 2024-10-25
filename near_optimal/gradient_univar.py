@@ -114,9 +114,9 @@ if __name__ == "__main__":
             history.append(max_error.item())
             pbar.set_postfix({ "max_error" : f"{history[-1]:<4.4f}" })
     pbar.close()
-    fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), show=False )
+    fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), show=False, title=r"$\ell^\infty$ Error Minimization with Soft Constraints"  )
     with torch.no_grad():
         nodes = v.compute_break_points()
-        ax.scatter( nodes, v(nodes) )
+        ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
         plt.show()
     print(should_be_nonnegative)
