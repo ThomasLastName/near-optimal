@@ -48,7 +48,7 @@ class spline(nn.Module):
         #     foo[j] = s[j+1]*self.m[j+1] - s[j]*self.m[j] - (a[j+1] - a[j]) - second_derivative[j]*self.c[j] # ~~~ "x" + (s_{j+1}-x_j)*c_j
         second_derivative = s.diff()    # ~~~ j-th component is (s[j+1] - s[j])
         violator = (s*self.m).diff() - a.diff() - second_derivative*self.c
-        return self.D/2 * second_derivative.abs() - violator.abs()
+        return self.D/2 * second_derivative.abs() / violator.abs()
     #
     # ~~~ Compute the points at which the neighboring lines intersect
     def compute_break_points( self ):
@@ -93,8 +93,8 @@ if __name__ == "__main__":
     x_test = torch.linspace(-1,1,1001)
     y_test = f(x_test)
     # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
-    penalty_coefficient = .5
-    penalty_fn = lambda x: torch.clamp(-x,min=0).max()  # ~~~ returns zero if x\geq0, else returns something positive
+    penalty_coefficient = 0.05
+    penalty_fn = lambda x: torch.clamp(1-x,min=0).max()  # ~~~ returns zero if x\geq0, else returns something positive
     lr = 1e-2
     N = 100
     optimizer = torch.optim.Adam( v.parameters(), lr=lr )
