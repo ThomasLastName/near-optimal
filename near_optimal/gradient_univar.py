@@ -7,7 +7,7 @@ from quality_of_life.my_plt_utils import points_with_curves
 from quality_of_life.my_base_utils import support_for_progress_bars
 
 class spline(nn.Module):
-    def __init__( self, x ):
+    def __init__( self, x, y ):
         super().__init__()
         x = x.squeeze()
         assert x.dim()==1
@@ -34,7 +34,7 @@ class spline(nn.Module):
         self.d = d
         self.c = c
         self.D = D
-        self.z = nn.Parameter( torch.randn_like(x) )
+        self.z = nn.Parameter( torch.randn_like(x) if y is None else torch.clone(y) )
     #
     # ~~~ Compute the thing that we want to be non-negative
     def compute_violation( self ):
@@ -89,14 +89,14 @@ if __name__ == "__main__":
     f = lambda x: torch.sin(2*torch.pi*x)
     x_train = torch.linspace(-1,1,m)
     y_train = f(x_train)
-    v = spline(x_train)
+    v = spline( x_train, y_train )
     x_test = torch.linspace(-1,1,1001)
     y_test = f(x_test)
     # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
     penalty_coefficient = .5
     penalty_fn = lambda x: torch.clamp(-x,min=0).max()  # ~~~ returns zero if x\geq0, else returns something positive
     lr = 1e-2
-    N = 1000
+    N = 100
     optimizer = torch.optim.Adam( v.parameters(), lr=lr )
     #
     # ~~~ Gradient Descent
@@ -119,4 +119,4 @@ if __name__ == "__main__":
         nodes = v.compute_break_points()
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
         plt.show()
-    print(should_be_nonnegative)
+    print(v.compute_violation())
