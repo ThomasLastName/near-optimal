@@ -96,11 +96,14 @@ class dual_spline(spline):
         self.z.data = z
         #
         # ~~~ Solve the Frank-Wolfe subproblem to find a better update direction than the gradient
-        v = cp.Variable( self.k-1, nonneg=True )
+        v = cp.Variable(self.k-1)
         objective = cp.Maximize( g@v )
         bbt_minus_aat = self.bbt_minus_aat.cpu().numpy()
         R = sum(v[i] * bbt_minus_aat[i] for i in range(14))
-        constraints = [ R << (1-self.eps)*np.eye(2*self.k) ]
+        constraints = [
+                v >= self.eps,
+                R << (1-self.eps)*np.eye(2*self.k)
+            ]
         problem = cp.Problem(objective, constraints)
         problem.solve()
         alpha = 2/(self.t+2)
