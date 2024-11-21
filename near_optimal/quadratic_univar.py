@@ -92,7 +92,7 @@ class dual_spline(spline):
         # ~~~ Compute the gradient of F(\lambda)
         self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
         z = torch.linalg.solve( self.Q, self.y )
-        g = ((self.a@z).abs() - (self.b@z).abs()).cpu().numpy()   # ~~~ \grad_\lambda F(\lambda)
+        g = ((self.a@z).abs()**2 - (self.b@z).abs()**2).cpu().numpy()   # ~~~ \grad_\lambda F(\lambda)
         self.z.data = z
         #
         # ~~~ Solve the Frank-Wolfe subproblem to find a better update direction than the gradient
