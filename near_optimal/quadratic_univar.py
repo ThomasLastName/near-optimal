@@ -77,7 +77,7 @@ def build_a_j(x,j):
 
 class dual_spline(spline):
     def __init__( self, x, y, eps=1e-6 ):
-        super().__init__(x)
+        super().__init__(x,y)
         self.y = y
         self.lamb = torch.randn(k-1).to( device=x.device, dtype=x.dtype )**2
         self.a = torch.stack( [ build_a_j(x,j) for j in range(k-1) ] )
