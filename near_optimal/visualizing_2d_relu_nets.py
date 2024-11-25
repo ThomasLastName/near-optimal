@@ -70,7 +70,7 @@ y_train = f(x_train)
 ## ~~~ Visulize the model after training
 ### ~~~
 
-optimizer = torch.optim.Adam( model.parameters(), lr=0.01 )
+optimizer = torch.optim.Adam( model.parameters(), lr=0.005 )
 loss_fn = nn.MSELoss()
 # fig, ax = plt.subplots(figsize=(12,6))
 if MAKE_GIF:
