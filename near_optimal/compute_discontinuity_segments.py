@@ -5,6 +5,7 @@ import cvxpy as cp
 import torch
 from tqdm import trange, tqdm
 from math import comb as binom
+from scipy.optimize import linprog
 from matplotlib import pyplot as plt
 from quality_of_life.my_torch_utils import cartesian_product
 from quality_of_life.my_plotly_utils import cell_viz
@@ -153,15 +154,28 @@ def solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose
                             problem.solve( solver=cp.ECOS, abstol=tol, reltol=tol, feastol=tol )
                         # print(problem.status)
                         found_an_x_that_intersects_the_boundary = ( problem.status==cp.OPTIMAL or problem.status==cp.OPTIMAL_INACCURATE )
+                        if found_an_x_that_intersects_the_boundary:
+                            endpoint = x.value
+                            break
                     else:
-                        raise NotImplementedError
-                    if found_an_x_that_intersects_the_boundary:                        
-                        endpoint = x.value
-                        # print(eps)
-                        break
+                        solved_problem = linprog(
+                                c = np.zeros(dim),
+                                #
+                                # ~~~ -Ax \leq b \iff Ax+b \geq 0
+                                A_ub = np.row_stack([ eps[i]*(-A[i]) for i in range(w) ]),
+                                b_ub = np.row_stack([ eps[i] * b[i] for i in range(w) ]),
+                                A_eq = np.row_stack([ a_new, A[j] ]),
+                                b_eq = np.row_stack([-b_new,-b[j] ]),
+                                bounds = (None,None),
+                                method = method
+                            )
+                        found_an_x_that_intersects_the_boundary = (solved_problem.status==0)
+                        if found_an_x_that_intersects_the_boundary:
+                            endpoint = solved_problem.x
+                            break
                 #
                 # ~~~ Now, `minimizer` and `end_point` form a line segment; let's make the line segment as long as possible within the region
-                if method=="cvxpy":
+                if method == "cvxpy":
                     t = cp.Variable(1,nonneg=True)  # ~~~ a non-negative scalar
                     x = cp.Variable(dim)            # ~~~ a point on the line segment beteen from `endpoint` to `minimizer`
                     constraints = [
@@ -180,7 +194,23 @@ def solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose
                     else:
                         other_endpoint = x.value
                 else:
-                    raise NotImplementedError
+                    signed_A = np.row_stack([ eps[i]*A[i] for i in range(w) ])
+                    signed_b = np.row_stack([ eps[i]*b[i] for i in range(w) ])
+                    # print((-A@(minimizer-endpoint))[:,None])
+                    # print((A@endpoint)[:,None] + b)
+                    solved_problem = linprog(
+                            c = -np.ones(1),
+                            #
+                            # ~~~ -Ax \leq b \iff Ax+b \geq 0
+                            A_ub = (-signed_A@(minimizer-endpoint))[:,None],
+                            b_ub = (signed_A@endpoint)[:,None] + signed_b,
+                            bounds = (0,None),
+                            method = method
+                        )
+                    if solved_problem.status==3:
+                        other_endpoint = endpoint + really_big_number*(minimizer-endpoint)
+                    else:
+                        other_endpoint = endpoint + solved_problem.x[0]*(minimizer-endpoint)
                 segments.append(( endpoint, other_endpoint ))
     return segments
             # #
@@ -242,7 +272,7 @@ def solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose
 
 #
 # ~~~ Call `solve_for_where_shallow_relu_net_is_zero` but, also, plot the results
-def minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, verbose=True, tol=1e-5, show=True, res=701, color="red", linewidth=2, figax=None ):
+def minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, verbose=True, tol=1e-5, show=True, res=701, color="red", linewidth=2, figax=None, method="cvxpy" ):
     #
     # ~~~ Assume that x_test==column_stack([X.flatten(),Y.flatten()]) where X,Y=meshgrid(x,y) where len(x)==len(y)==res
     res = math.sqrt(len(x_test))
@@ -289,7 +319,7 @@ def minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, verbose=True
             #
             # ~~~ For each hidden unit of the second layer, solve for where the input to that unit is zero on each polygon
             for c,d in iterator:
-                segments = solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose=verbose, tol=tol )
+                segments = solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose=verbose, tol=tol, method=method )
                 #
                 # ~~~ Plot the segments of discontinuity introduced by this particular hidden unit
                 univar_grid = np.linspace(0,1,15)   # ~~~ a discretization of [0,1]
@@ -311,7 +341,7 @@ def minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, verbose=True
     ax.set_ylim(ylim)
     ax.set_xlabel("x")
     ax.set_ylabel("y")
-    ax.set_title("Heatmap of the Output of a ReLU Network, with Points of Discontinuity Marked Red")
+    ax.set_title("Heatmap of the Output of a ReLU Network, with Lines of Discontinuity Added")
     fig.tight_layout()
     if show:
         plt.show()
@@ -320,13 +350,13 @@ def minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, verbose=True
 
 #
 # ~~~ Call `solve_for_where_shallow_relu_net_is_zero` but, also, plot the results
-def plot_where_relu_net_is_not_smooth( model, xlim=[-8,8], ylim=[-8,8], verbose=True, tol=1e-5, surface=True, show=True, res=701, graph_object="heatmap" ):
+def plot_where_relu_net_is_not_smooth( model, xlim=[-8,8], ylim=[-8,8], verbose=True, tol=1e-5, method="cvxpy", surface=True, show=True, res=501 ):
     #
     # ~~~ Instantiate the plot, and add at first the easy lines of discontinuity
     if surface:
-        surface_or_heatmap = cell_viz( model, xlim, ylim, show=False, res=701 )
+        surface_or_heatmap = cell_viz( model, xlim, ylim, show=False, res=res )
     else:
-        surface_or_heatmap = cell_viz( model, xlim, ylim, show=False, res=701, graph_object="heatmap" )
+        surface_or_heatmap = cell_viz( model, xlim, ylim, show=False, res=res, graph_object="heatmap" )
     lines = []
     A = model[0].weight.data.cpu().double().numpy()
     b = model[0].bias.data.cpu().double().numpy()
@@ -382,7 +412,7 @@ def plot_where_relu_net_is_not_smooth( model, xlim=[-8,8], ylim=[-8,8], verbose=
     with support_for_progress_bars():
         iterator = tqdm( zip(C,D), ascii=" >=", total=len(D), desc="Finding segments of discontinuity from the second layer" ) if verbose else zip(C,D)
         for c,d in iterator:
-            segments = solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose=verbose, tol=tol )
+            segments = solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose=verbose, tol=tol, method=method )
             univar_grid = np.linspace(0,1,15)
             for segment in segments:
                 start, end = segment
@@ -430,13 +460,13 @@ def plot_where_relu_net_is_not_smooth( model, xlim=[-8,8], ylim=[-8,8], verbose=
 
 #
 # ~~~ Call `solve_for_where_shallow_relu_net_is_zero` but, also, plot the results
-def plot_where_shallow_relu_net_is_zero( model, xlim=[-8,8], ylim=[-8,8], verbose=True, tol=1e-5 ):
+def plot_where_shallow_relu_net_is_zero( model, xlim=[-8,8], ylim=[-8,8], verbose=True, tol=1e-5, method="cvxpy" ):
     A = model[0].weight.data.cpu().double().numpy()
     b = model[0].bias.data.cpu().double().numpy()
     sign_patterns = derive_signs_for_linear_constraints_of_a_shallow_net( A, b, verbose=verbose, tol=tol, desc="Deriving Linear Pieces of the First Layer" )
     c = model[-1].weight.data.cpu().double().numpy()
     d = model[-1].bias.data.cpu().double().numpy()
-    segments = solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose=verbose, tol=tol )
+    segments = solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose=verbose, tol=tol, method=method )
     surface = cell_viz( model, xlim, ylim, show=False, res=1001 )
     lines = []
     univar_grid = np.linspace(0,1,15)
@@ -469,16 +499,16 @@ def plot_where_shallow_relu_net_is_zero( model, xlim=[-8,8], ylim=[-8,8], verbos
 if __name__ == "__main__":
     from torch import nn
     _ = torch.manual_seed(2024)
-    w = 4
+    w = 8
     d = 2
     model = nn.Sequential(
             nn.Linear(d,w),
             nn.ReLU(),
             nn.Linear(w,1)
         )
-    # plot_where_shallow_relu_net_is_zero(model)
+    # plot_where_shallow_relu_net_is_zero( model, method="highs" )
     x_test = cartesian_product( torch.linspace(-8,8,501), torch.linspace(-8,8,501) )
-    minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, tol=1e-5 )
+    minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, tol=1e-5, method="highs" )
     model = nn.Sequential(
             nn.Linear(d,w),
             nn.ReLU(),
@@ -486,7 +516,7 @@ if __name__ == "__main__":
             nn.ReLU(),
             nn.Linear(w,1)
         )
-    plot_where_relu_net_is_not_smooth( model, xlim=[-8,8], ylim=[-8,8] )
-    minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, tol=1e-5 )
+    plot_where_relu_net_is_not_smooth( model, xlim=[-8,8], ylim=[-8,8], method="highs" )
+    minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, tol=1e-5, method="highs" )
 
 #

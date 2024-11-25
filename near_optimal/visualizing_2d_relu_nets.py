@@ -1,4 +1,5 @@
 
+import warnings
 from tqdm import trange
 import torch
 from torch import nn
@@ -11,13 +12,19 @@ from quality_of_life.my_base_utils import support_for_progress_bars
 from near_optimal.compute_discontinuity_segments import minimalist_heatmap_where_relu_net_is_not_smooth
 
 
+warnings.filterwarnings(
+    "ignore", 
+    message  = "Solution may be inaccurate. Try another solver.*", 
+    category = UserWarning, 
+    module   = r".*cvxpy.*"
+)
 
 torch.set_default_dtype(torch.double)
 COMPUTE_SEGMENTS = True
 HOW_OFTEN = 30
 RES = 301
-N_EPOCHS = 3000
-N_TRAIN = 100
+N_EPOCHS = 5000
+N_TRAIN = 90
 MAKE_GIF = True
 MAX_TOL = 0.5
 MIN_TOL = 1e-10
@@ -34,7 +41,7 @@ strikes = 0
 ### ~~~
 
 L = 2
-w = 5
+w = 7
 list_of_layers = [    
         nn.Linear(2, w),
         nn.ReLU(),
@@ -70,13 +77,13 @@ y_train = f(x_train)
 ## ~~~ Visulize the model after training
 ### ~~~
 
-optimizer = torch.optim.Adam( model.parameters(), lr=0.005 )
+optimizer = torch.optim.Adam( model.parameters(), lr=0.001 )
 loss_fn = nn.MSELoss()
-# fig, ax = plt.subplots(figsize=(12,6))
+methods = ( "highs", "highs-ipm", "highs-ds", "cvxpy" )
+data_on_solvers = { method:0 for method in methods }
 if MAKE_GIF:
     gif = GifMaker( f"w={w}, e={N_EPOCHS}", ram_only=False, live_frame_duration=None )
 
-count = 0
 with support_for_progress_bars():
     for i in trange(N_EPOCHS):
         optimizer.zero_grad()
@@ -84,13 +91,22 @@ with support_for_progress_bars():
         loss = loss_fn(y_pred, y_train)
         loss.backward()
         optimizer.step()
-        count += 1
         if (i+1)%HOW_OFTEN==0 and (COMPUTE_SEGMENTS or MAKE_GIF):
             try:
+                failed_attempts = 0
                 while True:
                     try:
                         plt.close("all")
-                        fig, ax = minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, verbose=False, show=False, tol=tol )
+                        method = methods[min( failed_attempts, len(methods)-1 )]
+                        fig, ax = minimalist_heatmap_where_relu_net_is_not_smooth(
+                                model,
+                                x_test,
+                                verbose = False,
+                                show = False,
+                                tol = tol,
+                                color = "black",
+                                method = method
+                            )
                         _ = ax.scatter( x_train[:,0].numpy(), x_train[:,1].numpy(), c="green", s=10 )
                         strikes = 0
                         tol *= 0.2
@@ -98,6 +114,9 @@ with support_for_progress_bars():
                             tol = MIN_TOL
                         break
                     except:
+                        # if failed_attempts==0:
+                        #     print("highs didn't work")
+                        failed_attempts += 1
                         tol *= 1.1
                         if tol > MAX_TOL:
                             tol = MAX_TOL
@@ -107,6 +126,7 @@ with support_for_progress_bars():
                 fig.tight_layout()
                 if MAKE_GIF:
                     gif.capture()
+                    data_on_solvers[method] += 1
                 else:
                     plt.show()
             except:
@@ -117,6 +137,6 @@ with support_for_progress_bars():
         plt.close("all")
 
 if MAKE_GIF:
-    gif.develop(fps=30)
+    gif.develop( fps=30, cleanup=False )
 
 cell_viz( model, xlim=XLIM, ylim=YLIM )
