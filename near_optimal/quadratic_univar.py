@@ -76,7 +76,7 @@ def build_a_j(x,j):
     return a_j
 
 class dual_spline(spline):
-    def __init__( self, x, y, eps=1e-6 ):
+    def __init__( self, x, y, eps=1e-6, lr=1e-2 ):
         super().__init__(x,y)
         self.y = y
         self.lamb = torch.randn(k-1).to( device=x.device, dtype=x.dtype )**2
@@ -85,30 +85,77 @@ class dual_spline(spline):
         self.bbt_minus_aat = torch.stack([ torch.outer(self.b[j],self.b[j]) - torch.outer(self.a[j],self.a[j]) for j in range(k-1) ])
         self.t = 0  # ~~~ iterations completed thus far of the Frank-Wolfe algorithm
         self.eps = eps
+        self.lr = lr
+        # self.optimizer = torch.optim.Adam( [self.lamb], lr=lr )
+    #
+    # ~~~ 
+    def PGD_step(self):
+        #
+        # ~~~ Compute the gradient of F(\lambda)
+        self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
+        z = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y 
+        g = ((self.a@z)**2 - (self.b@z)**2).cpu().numpy()   # ~~~ \grad_\lambda F(\lambda)
+        objective_before_update = -torch.inner( self.z, self.y )
+        self.z.data = z
+        self.lamb += self.lr*g
+        # print( self.lamb, end="\n" )
+        #
+        # ~~~ Project onto the constraint set
+        s = cp.Variable(self.k-1)
+        objective = cp.Minimize( cp.sum_squares( s - self.lamb.double().cpu().numpy() ))
+        bbt_minus_aat = self.bbt_minus_aat.cpu().numpy()
+        R = sum(s[i] * bbt_minus_aat[i] for i in range(14))
+        constraints = [
+                s >= 0,
+                R << (1-self.eps)*np.eye(2*self.k)
+            ]
+        problem = cp.Problem(objective, constraints)
+        problem.solve()
+        self.lamb = torch.from_numpy(s.value).to( device=self.lamb.device, dtype=self.lamb.dtype )
+        return objective_before_update.detach().cpu().item()
     #
     # ~~~ 
     def frank_wolfe_step(self):
         #
         # ~~~ Compute the gradient of F(\lambda)
         self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
-        z = torch.linalg.solve( self.Q, self.y )
-        g = ((self.a@z).abs() - (self.b@z).abs()).cpu().numpy()   # ~~~ \grad_\lambda F(\lambda)
+        z = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y 
+        g = ((self.a@z)**2 - (self.b@z)**2).cpu().numpy()   # ~~~ \grad_\lambda F(\lambda)
+        objective_before_update = -torch.inner( self.z, self.y )
+        g *= self.lr
         self.z.data = z
         #
         # ~~~ Solve the Frank-Wolfe subproblem to find a better update direction than the gradient
-        v = cp.Variable(self.k-1)
-        objective = cp.Maximize( g@v )
+        s = cp.Variable(self.k-1)
+        objective = cp.Maximize( g@s )
         bbt_minus_aat = self.bbt_minus_aat.cpu().numpy()
-        R = sum(v[i] * bbt_minus_aat[i] for i in range(14))
+        R = sum(s[i] * bbt_minus_aat[i] for i in range(14))
         constraints = [
-                v >= self.eps,
+                s >= self.eps,
                 R << (1-self.eps)*np.eye(2*self.k)
             ]
         problem = cp.Problem(objective, constraints)
-        problem.solve()
-        alpha = 2/(self.t+2)
-        self.lamb = (1-alpha)*self.lamb + alpha*torch.from_numpy(v.value).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        self.t += 1
+        duality_gap = problem.solve()/self.lr
+        if duality_gap == float("inf"):
+            # print("decreasing learning rate")
+            self.lr /= (1+0.1)
+        else:
+            # print("increasing learning rate")
+            self.lr *= (1+0.1)
+            alpha = 2/(self.t+2)
+            self.lamb = (1-alpha)*self.lamb + alpha*torch.from_numpy(s.value).to( device=self.lamb.device, dtype=self.lamb.dtype )
+            self.t += 1
+        return objective_before_update, duality_gap
+    #
+    # ~~~
+    # def forward(self, x):
+    #     #
+    #     # ~~~ Compute the dual solution
+    #     self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
+    #     self.z = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y
+    #     #
+    #     # ~~~ Compute the primal solution
+    #     # return
 
 if __name__ == "__main__":
     #
@@ -124,12 +171,12 @@ if __name__ == "__main__":
     x_test = torch.linspace(-1,1,1001)
     y_test = f(x_test)
     # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
-    N = 10
+    N = 100
     best_error = float("inf")
     with support_for_progress_bars():
         pbar = tqdm( desc="Solving the Dual Problem Using Frank-Wolfe", total=N, ascii=' >=' )
         for _ in range(N):
-            v.frank_wolfe_step()
+            F, duality_gap = v.frank_wolfe_step()
             _ = pbar.update()
             with torch.no_grad():
                 errors = v(x_train) - y_train
@@ -137,14 +184,16 @@ if __name__ == "__main__":
                 max_error = errors.abs().max()
                 pbar.set_postfix({
                         "mse" : f"{mse:<4.4f}",
-                        "max_error" : f"{max_error:<4.4f}"
+                        "max_error" : f"{max_error:<4.4f}",
+                        "F(lambda)" : f"{F:<4.4f}",
+                        "gap" : f"{duality_gap:<4.4f}"
                     })
                 if max_error < best_error:
                     best_error = max_error
                     best_z = v.z.data.clone()
     pbar.close()
     v.z.data = best_z
-    fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), show=False, title="MSE Minimization with Hard Constraints" )
+    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="MSE Minimization with Hard Constraints" )
     with torch.no_grad():
         nodes = v.compute_break_points()
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
