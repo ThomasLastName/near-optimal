@@ -22,42 +22,85 @@ except: # ~~~ however, if those functions are not available, then let their defi
 
 #
 # ~~~ Minimize abs(a_new@x_new + b_new) subject to `eps[i]*(A[i]@x+b[i])>=0` for all i
-def minimize_abs_linear_function_on_polygon( a_new, b_new, A, b, eps, return_x=False, tol=None ):
+def minimize_abs_linear_function_on_polygon( a_new, b_new, A, b, eps, return_x=False, tol=None, method="highs" ):
     k,d = A.shape
     try:
         if np.allclose(a_new,0):
             assert b_new==0
-        x = cp.Variable(d)
-        inequality_constraints = [
-                eps[i] * (A[i]@x + b[i]) >= 0
-                for i in range(k)
-            ]
-        problem = cp.Problem( cp.Minimize(0), inequality_constraints+[ 0 == a_new@x + b_new ] )
-        if tol is None:
-            problem.solve(solver=cp.ECOS)
+        if method=="cvxpy":
+            x = cp.Variable(d)
+            inequality_constraints = [
+                    eps[i] * (A[i]@x + b[i]) >= 0
+                    for i in range(k)
+                ]
+            problem = cp.Problem( cp.Minimize(0), inequality_constraints+[ 0 == a_new@x + b_new ] )
+            if tol is None:
+                problem.solve(solver=cp.ECOS)
+            else:
+                problem.solve( solver=cp.ECOS, abstol=tol, reltol=tol, feastol=tol )
+            yes_it_is_feasible = not (problem.status == cp.INFEASIBLE)
+            assert yes_it_is_feasible
+            assert np.sqrt(np.mean(np.abs(x.value**2))) < 200
+            return ( 0., x.value ) if return_x else 0.
         else:
-            problem.solve( solver=cp.ECOS, abstol=tol, reltol=tol, feastol=tol )
-        yes_it_is_feasible = not (problem.status == cp.INFEASIBLE)
-        assert yes_it_is_feasible
-        assert np.sqrt(np.mean(np.abs(x.value**2))) < 200
-        return ( 0., x.value ) if return_x else 0.
+            solved_problem = linprog(
+                    c = np.zeros(d),
+                    #
+                    # ~~~ -Ax \leq b \iff Ax+b \geq 0
+                    A_ub = np.row_stack([ eps[i]*(-A[i]) for i in range(k) ]),
+                    b_ub = np.row_stack([ eps[i] * b[i] for i in range(k) ]),
+                    A_eq = np.row_stack([ a_new ]),
+                    b_eq = np.row_stack([-b_new ]),
+                    bounds = (None,None),
+                    method = method
+                )
+            yes_it_is_feasible = not (solved_problem.status == 2)
+            assert yes_it_is_feasible
+            assert np.sqrt(np.mean(np.abs(solved_problem.x**2))) < 200
+            return ( 0., solved_problem.x ) if return_x else 0.
     except AssertionError:
-        x = cp.Variable(d)
-        objective = cp.Minimize(cp.abs(a_new @ x + b_new))
-        inequality_constraints = [
-                eps[i] * (A[i]@x + b[i]) >= 0
-                for i in range(k)
-            ]
-        problem = cp.Problem( objective, inequality_constraints )
-        if tol is None:
-            problem.solve(solver=cp.ECOS)
+        if method=="cvxpy":
+            x = cp.Variable(d)
+            objective = cp.Minimize(cp.abs(a_new @ x + b_new))
+            inequality_constraints = [
+                    eps[i] * (A[i]@x + b[i]) >= 0
+                    for i in range(k)
+                ]
+            problem = cp.Problem( objective, inequality_constraints )
+            if tol is None:
+                problem.solve(solver=cp.ECOS)
+            else:
+                problem.solve( solver=cp.ECOS, abstol=tol, reltol=tol, feastol=tol )
+            return ( a_new @ x.value + b_new, x.value ) if return_x else a_new @ x.value + b_new
         else:
-            problem.solve( solver=cp.ECOS, abstol=tol, reltol=tol, feastol=tol )
-        return ( a_new @ x.value + b_new, x.value ) if return_x else a_new @ x.value + b_new 
-
+            solved_problem = linprog(
+                    c = np.array(d*[0.]+[1.]),  # ~~~ c == (0,...,0,1) length d+1; minimize the epigraph variable
+                    #
+                    # ~~~ -Ax \leq b \iff Ax+b \geq 0
+                    A_ub = np.row_stack(
+                            [
+                                np.concatenate([ eps[i]*(-A[i]), [0.] ])
+                                for i in range(k)
+                            ] +
+                            [ np.concatenate([ a_new, [-1.] ]) ] + 
+                            [ np.concatenate([-a_new, [-1.] ]) ]
+                        ),
+                    b_ub = np.row_stack(
+                            [ eps[i] * b[i] for i in range(k) ] + 
+                            [-b_new] +
+                            [ b_new]
+                        ),
+                    bounds = (None,None),
+                    method = method
+                )
+            # print(solved_problem)
+            minimized_abs_linear_function_on_polygon = solved_problem.x[-1]
+            x = solved_problem.x[:d]
+            assert abs( abs(a_new@x+b_new) - minimized_abs_linear_function_on_polygon ) < 1e-6
+            return ( a_new@x+b_new, x ) if return_x else a_new@x+b_new
 #
 # ~~~ Derive the sign patterns that are necessary to describe the j=1,...,1+binom(n+1,2) regions between n lines `A[i].T@x+b[i]==0` (i=1,...,n) via `\eps[i,j]*(A[i].T@x+b[i])>=0`
-def derive_signs_for_linear_constraints_of_a_shallow_net( A, b, verbose=True, tol=None, desc=None ):
+def derive_signs_for_linear_constraints_of_a_shallow_net( A, b, verbose=True, tol=None, desc=None, method="highs" ):
     n,d = A.shape
     assert b.shape==(n,)
     assert n>=2
@@ -101,7 +144,7 @@ def derive_signs_for_linear_constraints_of_a_shallow_net( A, b, verbose=True, to
 
 #
 # ~~~ Solve for the locus of points x where 0 == f(x) = d + \sum_{i=1}^n c_j*ReLU(A[i]@x+b[i])
-def solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose=True, really_big_number=2026, tol=1e-5, regularize=True, method="cvxpy" ):
+def solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose=True, really_big_number=2026, tol=1e-5, regularize=True, method="highs" ):
     w, dim = A.shape
     c = c.squeeze()
     assert len(sign_patterns) == sum( binom(w,j) for j in range(dim+1) )  # ~~~ safety feature; check that the number of sign patterns (i.e., regions of linearity) is correct
@@ -272,7 +315,7 @@ def solve_for_where_shallow_relu_net_is_zero( A, b, c, d, sign_patterns, verbose
 
 #
 # ~~~ Call `solve_for_where_shallow_relu_net_is_zero` but, also, plot the results
-def minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, verbose=True, tol=1e-5, show=True, res=701, color="red", linewidth=2, figax=None, method="cvxpy" ):
+def minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, verbose=True, tol=1e-5, show=True, res=701, color="red", linewidth=2, figax=None, method="highs" ):
     #
     # ~~~ Assume that x_test==column_stack([X.flatten(),Y.flatten()]) where X,Y=meshgrid(x,y) where len(x)==len(y)==res
     res = math.sqrt(len(x_test))
@@ -350,7 +393,7 @@ def minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, verbose=True
 
 #
 # ~~~ Call `solve_for_where_shallow_relu_net_is_zero` but, also, plot the results
-def plot_where_relu_net_is_not_smooth( model, xlim=[-8,8], ylim=[-8,8], verbose=True, tol=1e-5, method="cvxpy", surface=True, show=True, res=501 ):
+def plot_where_relu_net_is_not_smooth( model, xlim=[-8,8], ylim=[-8,8], verbose=True, tol=1e-5, method="highs", surface=True, show=True, res=501 ):
     #
     # ~~~ Instantiate the plot, and add at first the easy lines of discontinuity
     if surface:
@@ -460,7 +503,7 @@ def plot_where_relu_net_is_not_smooth( model, xlim=[-8,8], ylim=[-8,8], verbose=
 
 #
 # ~~~ Call `solve_for_where_shallow_relu_net_is_zero` but, also, plot the results
-def plot_where_shallow_relu_net_is_zero( model, xlim=[-8,8], ylim=[-8,8], verbose=True, tol=1e-5, method="cvxpy" ):
+def plot_where_shallow_relu_net_is_zero( model, xlim=[-8,8], ylim=[-8,8], verbose=True, tol=1e-5, method="highs" ):
     A = model[0].weight.data.cpu().double().numpy()
     b = model[0].bias.data.cpu().double().numpy()
     sign_patterns = derive_signs_for_linear_constraints_of_a_shallow_net( A, b, verbose=verbose, tol=tol, desc="Deriving Linear Pieces of the First Layer" )
