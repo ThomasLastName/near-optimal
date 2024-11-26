@@ -20,18 +20,18 @@ warnings.filterwarnings(
 )
 
 torch.set_default_dtype(torch.double)
-COMPUTE_SEGMENTS = True
-HOW_OFTEN = 30
-RES = 301
-N_EPOCHS = 5000
-N_TRAIN = 90
 MAKE_GIF = True
-MAX_TOL = 0.5
+HOW_OFTEN = 10
+RES = 301
+N_EPOCHS = 10000
+N_TRAIN = 90
+LR = 0.005
+MAX_TOL = 1e-2
 MIN_TOL = 1e-10
 XLIM = [-3,3]
 YLIM = [-3,3]
-PATIENCE = 50
-DEFAULT_TOL = 1e-6
+PATIENCE = float("inf")
+DEFAULT_TOL = 1e-2
 tol = DEFAULT_TOL
 strikes = 0
 
@@ -41,15 +41,15 @@ strikes = 0
 ### ~~~
 
 L = 2
-w = 7
+w = 15
 list_of_layers = [    
-        nn.Linear(2, w),
+        nn.Linear(2,w),
         nn.ReLU(),
     ] + (L-1)*[
-        nn.Linear(w, w),
+        nn.Linear(w,w),
         nn.ReLU(),
     ] + [
-        nn.Linear(w, 1),
+        nn.Linear(w,1),
     ]
 model = nn.Sequential(*list_of_layers)
 cell_viz( model, xlim=XLIM, ylim=YLIM )
@@ -77,21 +77,25 @@ y_train = f(x_train)
 ## ~~~ Visulize the model after training
 ### ~~~
 
-optimizer = torch.optim.Adam( model.parameters(), lr=0.001 )
+optimizer = torch.optim.Adam( model.parameters(), lr=LR )
 loss_fn = nn.MSELoss()
 methods = ( "highs", "highs-ipm", "highs-ds", "cvxpy" )
 data_on_solvers = { method:0 for method in methods }
 if MAKE_GIF:
-    gif = GifMaker( f"w={w}, e={N_EPOCHS}", ram_only=False, live_frame_duration=None )
+    gif = GifMaker( f"w={w}, e={N_EPOCHS}, lr={LR}", ram_only=False, live_frame_duration=None )
+else:
+    HOW_OFTEN = N_EPOCHS
 
+already = 0
+strikes = 0
 with support_for_progress_bars():
-    for i in trange(N_EPOCHS):
+    for i in trange(N_EPOCHS-already):
         optimizer.zero_grad()
         y_pred = model(x_train)
         loss = loss_fn(y_pred, y_train)
         loss.backward()
         optimizer.step()
-        if (i+1)%HOW_OFTEN==0 and (COMPUTE_SEGMENTS or MAKE_GIF):
+        if (i+1)%HOW_OFTEN==0:
             try:
                 failed_attempts = 0
                 while True:
@@ -109,6 +113,7 @@ with support_for_progress_bars():
                             )
                         _ = ax.scatter( x_train[:,0].numpy(), x_train[:,1].numpy(), c="green", s=10 )
                         strikes = 0
+                        data_on_solvers[method] += 1
                         tol *= 0.2
                         if tol<MIN_TOL:
                             tol = MIN_TOL
@@ -117,7 +122,7 @@ with support_for_progress_bars():
                         # if failed_attempts==0:
                         #     print("highs didn't work")
                         failed_attempts += 1
-                        tol *= 1.1
+                        tol *= 1.75
                         if tol > MAX_TOL:
                             tol = MAX_TOL
                             raise
@@ -126,15 +131,14 @@ with support_for_progress_bars():
                 fig.tight_layout()
                 if MAKE_GIF:
                     gif.capture()
-                    data_on_solvers[method] += 1
-                else:
-                    plt.show()
             except:
                 strikes += 1
                 tol = DEFAULT_TOL
                 if strikes >= PATIENCE:
                     raise
-        plt.close("all")
+    if not MAKE_GIF:
+        plt.show()
+    plt.close("all")
 
 if MAKE_GIF:
     gif.develop( fps=30, cleanup=False )
