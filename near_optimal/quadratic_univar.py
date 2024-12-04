@@ -8,6 +8,7 @@ from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
 from quality_of_life.my_plt_utils import points_with_curves
 from quality_of_life.my_base_utils import support_for_progress_bars
+from quality_of_life.my_cvx_utils import dual_lower_bound_on_QCQP
 
 
 
@@ -90,17 +91,12 @@ class dual_spline(spline):
     #
     # ~~~ Solve the dual problem in epigraph form
     def S_Lemma(self):
-        lamb = cp.Variable( self.k-1, nonneg=True )
-        gamma = cp.Variable(1)
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
-        Q = np.eye(2*self.k) + sum(lamb[i] * aat_minus_bbt[i] for i in range(self.k-1))
-        beta = -self.y.cpu().numpy()
-        M = cp.vstack([
-                cp.hstack([ Q, beta.reshape(-1,1) ]),
-                cp.reshape( cp.hstack([ beta, gamma ]), (1,-1) )
-            ])
-        problem = cp.Problem( cp.Minimize(gamma), [M>>0] )
-        problem.solve()
+        c_o = -self.y.cpu().numpy()
+        m = len(c_o)
+        d_o = 0
+        H_o = np.eye(m)
+        _, gamma, lamb, _ = dual_lower_bound_on_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[0.]  )
         self.lamb = torch.from_numpy(lamb.value).to( device=self.lamb.device, dtype=self.lamb.dtype )
         self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
         self.z.data = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y 
@@ -190,7 +186,7 @@ if __name__ == "__main__":
     x_test = torch.linspace(-1,1,1001)
     y_test = f(x_test)
     # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
-    N = 100
+    N = None
     best_error = float("inf")
     if N is None:
         v.S_Lemma()
