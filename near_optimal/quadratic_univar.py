@@ -88,6 +88,24 @@ class dual_spline(spline):
         self.lr = lr
         # self.optimizer = torch.optim.Adam( [self.lamb], lr=lr )
     #
+    # ~~~ Solve the dual problem in epigraph form
+    def S_Lemma(self):
+        lamb = cp.Variable( self.k-1, nonneg=True )
+        gamma = cp.Variable(1)
+        aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
+        Q = np.eye(2*self.k) + sum(lamb[i] * aat_minus_bbt[i] for i in range(self.k-1))
+        beta = -self.y.cpu().numpy()
+        M = cp.vstack([
+                cp.hstack([ Q, beta.reshape(-1,1) ]),
+                cp.reshape( cp.hstack([ beta, gamma ]), (1,-1) )
+            ])
+        problem = cp.Problem( cp.Minimize(gamma), [M>>0] )
+        problem.solve()
+        self.lamb = torch.from_numpy(lamb.value).to( device=self.lamb.device, dtype=self.lamb.dtype )
+        self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
+        self.z.data = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y 
+        print(f"The dual max is {gamma.value}")
+    #
     # ~~~ 
     def PGD_step(self):
         #
@@ -104,12 +122,12 @@ class dual_spline(spline):
         s = cp.Variable(self.k-1)
         objective = cp.Minimize( cp.sum_squares( s - self.lamb.double().cpu().numpy() ))
         bbt_minus_aat = self.bbt_minus_aat.cpu().numpy()
-        R = sum(s[i] * bbt_minus_aat[i] for i in range(14))
+        R = sum(s[i] * bbt_minus_aat[i] for i in range(self.k-1))
         constraints = [
                 s >= 0,
                 R << (1-self.eps)*np.eye(2*self.k)
             ]
-        problem = cp.Problem(objective, constraints)
+        problem = cp.Problem( objective, constraints )
         problem.solve()
         self.lamb = torch.from_numpy(s.value).to( device=self.lamb.device, dtype=self.lamb.dtype )
         return objective_before_update.detach().cpu().item()
@@ -129,7 +147,7 @@ class dual_spline(spline):
         s = cp.Variable(self.k-1)
         objective = cp.Maximize( g@s )
         bbt_minus_aat = self.bbt_minus_aat.cpu().numpy()
-        R = sum(s[i] * bbt_minus_aat[i] for i in range(14))
+        R = sum(s[i] * bbt_minus_aat[i] for i in range(self.k-1))
         constraints = [
                 s >= self.eps,
                 R << (1-self.eps)*np.eye(2*self.k)
@@ -168,30 +186,35 @@ if __name__ == "__main__":
     x_train = torch.linspace(-1,1,m)
     y_train = f(x_train)
     v = dual_spline( x_train, y_train )
+    v.z.data = torch.randn(m)
     x_test = torch.linspace(-1,1,1001)
     y_test = f(x_test)
     # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
     N = 100
     best_error = float("inf")
-    with support_for_progress_bars():
-        pbar = tqdm( desc="Solving the Dual Problem Using Frank-Wolfe", total=N, ascii=' >=' )
-        for _ in range(N):
-            F, duality_gap = v.frank_wolfe_step()
-            _ = pbar.update()
-            with torch.no_grad():
-                errors = v(x_train) - y_train
-                mse = (errors**2).mean()
-                max_error = errors.abs().max()
-                pbar.set_postfix({
-                        "mse" : f"{mse:<4.4f}",
-                        "max_error" : f"{max_error:<4.4f}",
-                        "F(lambda)" : f"{F:<4.4f}",
-                        "gap" : f"{duality_gap:<4.4f}"
-                    })
-                if max_error < best_error:
-                    best_error = max_error
-                    best_z = v.z.data.clone()
-    pbar.close()
+    if N is None:
+        v.S_Lemma()
+        best_z = v.z.data.clone()
+    if N is not None:
+        with support_for_progress_bars():
+            pbar = tqdm( desc="Solving the Dual Problem Using Frank-Wolfe", total=N, ascii=' >=' )
+            for _ in range(N):
+                F, duality_gap = v.frank_wolfe_step()
+                _ = pbar.update()
+                with torch.no_grad():
+                    errors = v(x_train) - y_train
+                    mse = (errors**2).mean()
+                    max_error = errors.abs().max()
+                    pbar.set_postfix({
+                            "mse" : f"{mse:<4.4f}",
+                            "max_error" : f"{max_error:<4.4f}",
+                            "F(lambda)" : f"{F:<4.4f}",
+                            "gap" : f"{duality_gap:<4.4f}"
+                        })
+                    if max_error < best_error:
+                        best_error = max_error
+                        best_z = v.z.data.clone()
+        pbar.close()
     v.z.data = best_z
     fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="MSE Minimization with Hard Constraints" )
     with torch.no_grad():
@@ -199,3 +222,5 @@ if __name__ == "__main__":
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
         plt.show()
     print(v.compute_violation())
+
+#
