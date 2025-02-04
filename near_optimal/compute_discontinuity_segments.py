@@ -98,6 +98,7 @@ def minimize_abs_linear_function_on_polygon( a_new, b_new, A, b, eps, return_x=F
             x = solved_problem.x[:d]
             assert abs( abs(a_new@x+b_new) - minimized_abs_linear_function_on_polygon ) < 1e-6
             return ( a_new@x+b_new, x ) if return_x else a_new@x+b_new
+
 #
 # ~~~ Derive the sign patterns that are necessary to describe the j=1,...,1+binom(n+1,2) regions between n lines `A[i].T@x+b[i]==0` (i=1,...,n) via `\eps[i,j]*(A[i].T@x+b[i])>=0`
 def derive_signs_for_linear_constraints_of_a_shallow_net( A, b, verbose=True, tol=None, desc=None, method="highs" ):
@@ -384,7 +385,7 @@ def minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, verbose=True
     ax.set_ylim(ylim)
     ax.set_xlabel("x")
     ax.set_ylabel("y")
-    ax.set_title("Heatmap of the Output of a ReLU Network, with Lines of Discontinuity Added")
+    ax.set_title("Heatmap of the Output of a ReLU Network, Showing Seams Between Linear Pieces")
     fig.tight_layout()
     if show:
         plt.show()
@@ -549,7 +550,7 @@ if __name__ == "__main__":
             nn.ReLU(),
             nn.Linear(w,1)
         )
-    # plot_where_shallow_relu_net_is_zero( model, method="highs" )
+    plot_where_shallow_relu_net_is_zero( model, method="highs" )
     x_test = cartesian_product( torch.linspace(-8,8,501), torch.linspace(-8,8,501) )
     minimalist_heatmap_where_relu_net_is_not_smooth( model, x_test, tol=1e-5, method="highs" )
     model = nn.Sequential(

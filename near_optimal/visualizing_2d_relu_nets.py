@@ -20,16 +20,16 @@ warnings.filterwarnings(
 )
 
 torch.set_default_dtype(torch.double)
+torch.manual_seed(2025)
 MAKE_GIF = True
-HOW_OFTEN = 10
 RES = 301
-N_EPOCHS = 10000
-N_TRAIN = 90
+N_EPOCHS = 5000
+N_TRAIN = 250
 LR = 0.005
 MAX_TOL = 1e-2
-MIN_TOL = 1e-10
-XLIM = [-3,3]
-YLIM = [-3,3]
+MIN_TOL = 1e-7
+XLIM = [-4,4]
+YLIM = [-2,2]
 PATIENCE = float("inf")
 DEFAULT_TOL = 1e-2
 tol = DEFAULT_TOL
@@ -41,7 +41,7 @@ strikes = 0
 ### ~~~
 
 L = 2
-w = 15
+w = 10
 list_of_layers = [    
         nn.Linear(2,w),
         nn.ReLU(),
@@ -88,59 +88,40 @@ else:
 
 already = 0
 strikes = 0
+failed_last_time = False
 with support_for_progress_bars():
     for i in trange(N_EPOCHS-already):
+        if MAKE_GIF: HOW_OFTEN = N_EPOCHS//50 + 5
         optimizer.zero_grad()
         y_pred = model(x_train)
         loss = loss_fn(y_pred, y_train)
         loss.backward()
         optimizer.step()
-        if (i+1)%HOW_OFTEN==0:
+        if (i+1)%HOW_OFTEN==0 or failed_last_time:
             try:
-                failed_attempts = 0
-                while True:
-                    try:
-                        plt.close("all")
-                        method = methods[min( failed_attempts, len(methods)-1 )]
-                        fig, ax = minimalist_heatmap_where_relu_net_is_not_smooth(
-                                model,
-                                x_test,
-                                verbose = False,
-                                show = False,
-                                tol = tol,
-                                color = "black",
-                                method = method
-                            )
-                        _ = ax.scatter( x_train[:,0].numpy(), x_train[:,1].numpy(), c="green", s=10 )
-                        strikes = 0
-                        data_on_solvers[method] += 1
-                        tol *= 0.2
-                        if tol<MIN_TOL:
-                            tol = MIN_TOL
-                        break
-                    except:
-                        # if failed_attempts==0:
-                        #     print("highs didn't work")
-                        failed_attempts += 1
-                        tol *= 1.75
-                        if tol > MAX_TOL:
-                            tol = MAX_TOL
-                            raise
+                plt.close("all")
+                fig, ax = minimalist_heatmap_where_relu_net_is_not_smooth(
+                        model,
+                        x_test,
+                        verbose = False,
+                        show = False,
+                        tol = tol,
+                        color = "black"
+                    )
+                _ = ax.scatter( x_train[:,0].numpy(), x_train[:,1].numpy(), c=y_train.numpy(), cmap="viridis", edgecolors="black", s=15 )
                 _ = ax.set_xlim(XLIM)
                 _ = ax.set_ylim(YLIM)
                 fig.tight_layout()
-                if MAKE_GIF:
-                    gif.capture()
+                if MAKE_GIF: gif.capture()
+                tol /= 1.25
+                if tol<MIN_TOL: tol = MIN_TOL
             except:
-                strikes += 1
-                tol = DEFAULT_TOL
-                if strikes >= PATIENCE:
-                    raise
-    if not MAKE_GIF:
-        plt.show()
+                failed_last_time = True
+                tol *= 1.25
+                if tol>MAX_TOL: tol = MAX_TOL
+    if not MAKE_GIF: plt.show()
     plt.close("all")
 
-if MAKE_GIF:
-    gif.develop( fps=30, cleanup=False )
+if MAKE_GIF: gif.develop( fps=30, cleanup=False )
 
 cell_viz( model, xlim=XLIM, ylim=YLIM )
