@@ -91,7 +91,7 @@ strikes = 0
 failed_last_time = False
 with support_for_progress_bars():
     for i in trange(N_EPOCHS-already):
-        if MAKE_GIF: HOW_OFTEN = N_EPOCHS//50 + 5
+        if MAKE_GIF: HOW_OFTEN = min( i//100 + 1, 30 )
         optimizer.zero_grad()
         y_pred = model(x_train)
         loss = loss_fn(y_pred, y_train)
@@ -112,13 +112,14 @@ with support_for_progress_bars():
                 _ = ax.set_xlim(XLIM)
                 _ = ax.set_ylim(YLIM)
                 fig.tight_layout()
-                if MAKE_GIF: gif.capture()
+                if MAKE_GIF: gif.capture(dpi=200)
                 tol /= 1.25
                 if tol<MIN_TOL: tol = MIN_TOL
+                failed_last_time = False
             except:
-                failed_last_time = True
                 tol *= 1.25
                 if tol>MAX_TOL: tol = MAX_TOL
+                failed_last_time = True
     if not MAKE_GIF: plt.show()
     plt.close("all")
 
