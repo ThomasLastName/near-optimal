@@ -2,13 +2,14 @@
 import torch
 from torch import nn
 from near_optimal.gradient_univar import spline
+from near_optimal.PGD_univar import CarefulNet
 import cvxpy as cp
 import numpy as np
-from tqdm.auto import tqdm
+from tqdm.auto import tqdm, trange
 from matplotlib import pyplot as plt
-from quality_of_life.my_plt_utils import points_with_curves
+from quality_of_life.my_plt_utils import points_with_curves, GifMaker
 from quality_of_life.my_base_utils import support_for_progress_bars
-from quality_of_life.my_cvx_utils import solve_dual_of_QCQP
+from quality_of_life.my_cvx_utils import solve_dual_of_QCQP, solve_rank_relaxation_of_QCQP
 
 
 
@@ -37,7 +38,7 @@ def build_b_j(x,j):
     b_2j   = (D_j/2) * (-1) / (d_j)
     b_2jm1 = (D_j/2) / d_j
     #
-    # ~~~ Assign the computed coefficients to the non-zero positions in the vector a_j
+    # ~~~ Assign the computed coefficients to the non-zero positions in the vector b_j
     b_j = torch.zeros_like(x)
     b_j[2*j+2-1] = b_2jp2   # ~~~ b^{(j)}_{2j+2}
     b_j[2*j+1-1] = b_2jp1   # ~~~ b^{(j)}_{2j+1}
@@ -90,16 +91,112 @@ class dual_spline(spline):
         # self.optimizer = torch.optim.Adam( [self.lamb], lr=lr )
     #
     # ~~~ Solve the dual problem in epigraph form
-    def S_Lemma(self):
+    def ell_infty_S_Lemma_quadratic_slack( self, *args, **kwargs ):
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
-        c_o = -self.y.cpu().numpy()
-        m = len(c_o)
-        d_o = 0
+        m = len(self.y)
+        H_o = np.zeros(( m+1, m+1 ))
+        c_o = np.array( m*[0.] + [1.] )
+        d_o = 0.
+        H_I = np.concatenate([
+                np.pad( aat_minus_bbt, ( (0,0), (0,1), (0,1) ) ),   # ~~~ pad the "actual constraints" with zero for the epigraph variable
+                np.stack([ np.diag( j*[0.] + [1.] + (m-j-1)*[0.] + [-1.] ) for j in range(m)  ])
+            ])
+        c_I = np.vstack([
+                np.zeros(( self.k-1, m+1 )),
+                np.hstack(( np.diag(-self.y.cpu().numpy().flatten()), np.zeros((m,1)) ))
+            ])
+        d_I = np.concatenate([
+                np.zeros(self.k-1),
+                self.y.cpu().numpy().flatten()**2
+            ])
+        _, gamma, lamb = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        self.lamb = torch.from_numpy(lamb[:(self.k-1)]).to( device=self.lamb.device, dtype=self.lamb.dtype )
+        self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
+        self.z.data = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y 
+    #
+    # ~~~ Solve the dual problem in epigraph form using Simon's suggestion of a linear (rather than non-convex quadratic) epigraph constraint
+    def ell_infty_S_Lemma( self, *args, **kwargs ):
+        aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
+        m = len(self.y)
+        H_o = np.zeros(( m+1, m+1 ))
+        c_o = np.array( m*[0.] + [1.] )
+        d_o = 0.
+        H_I = np.concatenate([
+                np.pad( aat_minus_bbt, ((0,0),(0,1),(0,1)) ),   # ~~~ pad the "actual constraints" with zero for the epigraph variable
+                np.zeros(( 2*m, m+1, m+1 ))
+            ])
+        c_I = np.vstack([
+                np.zeros(( self.k-1, m+1 )),
+                np.hstack([ np.eye(m), -np.ones((m,1)) ]),
+                np.hstack([ -np.eye(m), -np.ones((m,1)) ]),
+            ])
+        d_I = np.concatenate([
+                np.zeros(self.k-1),
+                -self.y.cpu().numpy(),
+                self.y.cpu().numpy()
+            ])
+        _, gamma, lamb = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        self.lamb = torch.from_numpy(lamb[:(self.k-1)]).to( device=self.lamb.device, dtype=self.lamb.dtype )
+        self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
+        self.z.data = torch.linalg.solve( self.Q, self.y ) 
+    #
+    # ~~~ Solve a semi-definite relaxation of the dual problem
+    def ell_infty_rank_relaxation( self, *args, **kwargs ):
+        aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
+        m = len(self.y)
+        H_o = np.zeros(( m+1, m+1 ))
+        c_o = np.array( m*[0.] + [1.] )
+        d_o = 0.
+        H_I = np.concatenate([
+                np.pad( aat_minus_bbt, ( (0,0), (0,1), (0,1) ) ),   # ~~~ pad the "actual constraints" with zero for the epigraph variable
+                np.stack([ np.diag( j*[0.] + [1.] + (m-j-1)*[0.] + [-1.] ) for j in range(m)  ])
+            ])
+        c_I = np.vstack([
+                np.zeros(( self.k-1, m+1 )),
+                np.hstack(( np.diag(-self.y.cpu().numpy().flatten()), np.zeros((m,1)) ))
+            ])
+        d_I = np.concatenate([
+                np.zeros(self.k-1),
+                self.y.cpu().numpy().flatten()**2
+            ])
+        _, X, x = solve_rank_relaxation_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        self.z.data = torch.from_numpy(x[:-1])
+    #
+    # ~~~ Solve the dual problem in epigraph form
+    def S_Lemma( self, *args, **kwargs ):
+        aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
+        m = len(self.y)
         H_o = np.eye(m)
-        _, gamma, lamb = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[0.]  )
+        c_o = -self.y.cpu().numpy()
+        d_o = (self.y**2).sum().item()
+        _, gamma, lamb = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[0.], *args, **kwargs )
         self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
         self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
         self.z.data = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y 
+        print(f"The dual max is {gamma}")
+    #
+    # ~~~ Solve (in epigraph form) the dual of the quadratic feasibility problem of the feasibility problem ||z-y||_2^2/m\leq\noise and |a[i].T@z|\leq|b[i].T^@z| for all i
+    def noisy_S_Lemma( self, noise=0.1, *args, **kwargs  ):
+        #
+        # ~~~ Set the objective function to be identically zero
+        m = len(self.y)
+        d_o = 0
+        c_o = np.zeros(m)
+        H_o = np.eye(m)
+        #
+        # ~~~ Set the inequality constraints
+        aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()                   # ~~~ shape (self.k-1, m, m)
+        H_I = np.concatenate([ aat_minus_bbt, np.eye(m)[np.newaxis,:]/m ])  # ~~~ shape ( self.k,  m, m)
+        c_I = (self.k-1)*[np.zeros(m)] + [-self.y.cpu().numpy()/m]
+        d_I = (self.k-1)*[0.] + [ (self.y.cpu()**2).mean().numpy() - noise ]
+        #
+        # ~~~ Solve the dual
+        _, gamma, lamb = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        #
+        # ~~~ Process the results
+        self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
+        self.Q = torch.from_numpy( (lamb.reshape(-1,1,1)*H_I).sum(axis=0) ).to( device=self.lamb.device, dtype=self.lamb.dtype )
+        self.z.data = torch.linalg.solve( self.Q, self.y*lamb[-1]/m )
         print(f"The dual max is {gamma}")
     #
     # ~~~ 
@@ -174,25 +271,46 @@ class dual_spline(spline):
 if __name__ == "__main__":
     #
     # ~~~ Config
-    torch.manual_seed(2024)
-    torch.set_default_dtype(torch.double)
+    torch.manual_seed(2025)
     k = 15
     m =  2*k
     f = lambda x: torch.sin(2*torch.pi*x)
-    scale = 0.2
+    noise_level = 0.1
     x_train = torch.linspace(-1,1,m)
-    y_train = f(x_train) + scale*torch.randn_like(x_train)
-    v = dual_spline( x_train, y_train )
-    v.z.data = torch.randn(m)
+    y_train = f(x_train) + noise_level*torch.randn_like(x_train)
     x_test = torch.linspace(-1,1,1001)
     y_test = f(x_test)
-    # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
+    v = dual_spline( x_train, y_train )
+    v.z.data = torch.randn(m)
     N = None
-    best_error = float("inf")
+    noise = None
+    # #
+    # # ~~~ Try gradient descent on the problem \min_z \max_\ell -\langle z,a_\ell \rangle*\langle z,b_\ell \rangle subject to \|z-y\|_\infty \leq \eta
+    # v.ell_infty_projection(eta=noise)
+    # optimizer = torch.optim.Adam( v.parameters(), lr=1e-3 )
+    # gif = GifMaker()
+    # fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False )
+    # gif.capture()
+    # with support_for_progress_bars():
+    #     for _ in tqdm(range(2000)):
+    #         predictions = v.z   # == v(x_train)
+    #         loss = ( (v.a@predictions)**2 - (v.b@predictions)**2 ).max()
+    #         loss.backward()
+    #         optimizer.step()
+    #         optimizer.zero_grad()
+    #         v.ell_infty_projection(eta=noise)
+    #         if (_+1)%10==0:
+    #             fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False, fig=fig, ax=ax )
+    #             gif.capture()
+    #     fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", fig=fig, ax=ax, show=False )
+    #     gif.develop()
+    #
+    # ~~~ Solve using the S-lemma
     if N is None:
-        v.S_Lemma()
+        v.ell_infty_S_Lemma( eps_abs=1e-3, eps_rel=1e-3 ) if noise is None else v.noisy_S_Lemma( noise, eps_abs=1e-2, eps_rel=1e-2, eps_infeas=1e-2  )
         best_z = v.z.data.clone()
     if N is not None:
+        best_error = float("inf")
         with support_for_progress_bars():
             pbar = tqdm( desc="Solving the Dual Problem Using Frank-Wolfe", total=N, ascii=' >=' )
             for _ in range(N):
@@ -213,11 +331,107 @@ if __name__ == "__main__":
                         best_z = v.z.data.clone()
         pbar.close()
     v.z.data = best_z
-    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="MSE Minimization with Hard Constraints" )
+    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="MSE Minimization Subject to Constraints on the Location of Breakpoints" )
     with torch.no_grad():
         nodes = v.compute_break_points()
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
-        plt.show()
+    plt.show()
+    #
+    # ~~~ Try taking that as the initialization for a ReLU network
+    v = CarefulNet(x_train)
+    with torch.no_grad():
+        slopes = (best_z[1::2] - best_z[::2]) / (x_train[1::2] - x_train[::2])
+        v.relu_net[0].bias.data = -nodes.reshape(v.relu_net[0].bias.data.shape)
+        v.a.data = slopes[0]
+        v.relu_net[-1].weight.data = slopes.diff().reshape(v.relu_net[-1].weight.data.shape)
+        v.relu_net[-1].bias.fill_( best_z[0] - slopes[0]*x_train[0] )
+    fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), show=False, title="MSE Minimization Subject to Constraints on the Location of Breakpoints" )
+    with torch.no_grad():
+        ax.scatter( nodes, v(nodes.reshape(-1,1)), color="blue", alpha=0.4 )
+    plt.show()
+    #
+    # ~~~ Train it
+    optimizer = torch.optim.Adam( v.parameters(), lr=1e-2 )
+    x_train_vertical = x_train.reshape(-1,1)
+    gif = GifMaker()
+    fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", show=False )  
+    gif.capture()
+    with support_for_progress_bars():
+        for _ in trange(10000):
+            predictinons = v(x_train_vertical)
+            max_error = (y_train-predictinons).abs().max()
+            max_error.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            v.project()
+            if (_+1)%100:
+                fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", show=False, fig=fig, ax=ax )
+                gif.capture()
+        points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", fig=fig, ax=ax )
+        gif.develop()
+    #
+    # ~~~ Train a neural net for comparison
+    model = nn.Sequential(
+            nn.Unflatten( dim=-1, unflattened_size=(-1,1) ),
+            nn.Linear(1,k-1),
+            nn.ReLU(),
+            nn.Linear(k-1,1)
+        )
+    big_model = nn.Sequential(
+            nn.Unflatten( dim=-1, unflattened_size=(-1,1) ),
+            nn.Linear(1,40),
+            nn.ReLU(),
+            nn.Linear(40,40),
+            nn.ReLU(),
+            nn.Linear(40,1),
+        )
+    ocassional_model = nn.Sequential(
+            nn.Unflatten( dim=-1, unflattened_size=(-1,1) ),
+            nn.Linear(1,40),
+            nn.ReLU(),
+            nn.Linear(40,40),
+            nn.ReLU(),
+            nn.Linear(40,1),
+        )
+    # gif = GifMaker()
+    optimizer = torch.optim.Adam( model.parameters(), lr=1e-2 )
+    big_optimizer = torch.optim.Adam( big_model.parameters(), lr=1e-2 )
+    ocassional_optimizer = torch.optim.Adam( ocassional_model.parameters(), lr=1e-2 )
+    with support_for_progress_bars():
+        for epoch in trange(10000):
+            loss = (( model(x_train).flatten() - y_train )**2).mean()
+            loss.backward()
+            big_loss = (( big_model(x_train).flatten() - y_train )**2).mean()
+            big_loss.backward()
+            if epoch % 10 == 0:
+                ocassional_loss = (( ocassional_model(x_train).flatten() - y_train )**2).mean()
+                ocassional_loss.backward()
+            for opt in ( optimizer, big_optimizer, ocassional_optimizer ):
+                opt.step()
+                opt.zero_grad()
+    fig, ax = points_with_curves(
+            x = x_train,
+            y = y_train,
+            curves = ( big_model, ocassional_model, model, v, f ),
+            curve_labels = ( "Large Network Trained with ADAM", "Large Network Trained with ADAM and Early Stopping", "Same Small Network Trained with ADAM", "Small Network Trained with Our Method", "Ground Truth" ),
+            curve_colors = ( "black", "grey", "red", "blue", "green"),
+            curve_marks  = [ "-", "-", "-", "-", "--" ],
+            show = False,
+            title = "Comparison of Our Model with ADAM and Larger Neural Networks",
+            model_fit = False
+        )
+    handles, labels = plt.gca().get_legend_handles_labels()
+    unique_labels = list(set(labels))  # Get unique labels
+    by_label = {}   # Create a dictionary to store handles and line styles for each unique label
+    for label in unique_labels:
+        indices = [i for i, x in enumerate(labels) if x == label]  # Find indices for each label
+        handle = handles[indices[0]]  # Get the handle for the first occurrence of the label
+        line_style = handle.get_linestyle()  # Get the line style
+        by_label[label] = (handle, line_style)  # Store handle and line style
+    legend_handles = [by_label[label][0] for label in by_label]
+    legend_labels = [f"{label}" for label in by_label]  # Include line style in label
+    plt.legend( legend_handles, legend_labels, fontsize=17 )
+    plt.show()
     print(v.compute_violation())
 
 #

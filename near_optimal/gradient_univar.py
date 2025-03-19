@@ -79,24 +79,30 @@ class spline(nn.Module):
             a[j-1] = (self.z[2*j-1] + self.z[2*j-1-1]) / 2              # ~~~ (z_{2j} + z_{2j-1}) / 2
             s[j-1] = (self.z[2*j-1] - self.z[2*j-1-1]) / self.d[j-1]    # ~~~ (z_{2j} - z_{2j-1}) / (x_{2j} - x_{2j-1})
         return a[indices] + s[indices] * (x - self.m[indices])
+    #
+    # ~~~ Project z onto the set of z's that satisfy \|z-y\|_{\ell^\infty}\leq\eta
+    def ell_infty_projection( self, eta=0.1 ):
+        with torch.no_grad():
+            self.z.clamp_( min=self.y-eta, max=self.y+eta )
 
 if __name__ == "__main__":
     #
     # ~~~ Config
-    torch.manual_seed(2024)
+    torch.manual_seed(2025)
     k = 15
     m =  2*k
     f = lambda x: torch.sin(2*torch.pi*x)
+    scale = 0.2
     x_train = torch.linspace(-1,1,m)
-    y_train = f(x_train)
+    y_train = f(x_train) + scale*torch.randn_like(x_train)
     v = spline( x_train, y_train )
     x_test = torch.linspace(-1,1,1001)
     y_test = f(x_test)
     # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
-    penalty_coefficient = 0.05
+    penalty_coefficient = 3.5
     penalty_fn = lambda x: torch.clamp(1-x,min=0).max()  # ~~~ returns zero if x\geq0, else returns something positive
     lr = 1e-2
-    N = 100
+    N = 400
     optimizer = torch.optim.Adam( v.parameters(), lr=lr )
     #
     # ~~~ Gradient Descent
