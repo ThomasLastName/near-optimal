@@ -90,8 +90,8 @@ class dual_spline(spline):
         self.lr = lr
         # self.optimizer = torch.optim.Adam( [self.lamb], lr=lr )
     #
-    # ~~~ Solve the dual problem in epigraph form
-    def ell_infty_S_Lemma_quadratic_slack( self, *args, **kwargs ):
+    # ~~~ Solve the dual problem in of minimize t subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0 and (z_j-y_j)**2 - t^2 \leq 0
+    def S_Lemma_1( self, *args, **kwargs ):
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
         H_o = np.zeros(( m+1, m+1 ))
@@ -109,13 +109,13 @@ class dual_spline(spline):
                 np.zeros(self.k-1),
                 self.y.cpu().numpy().flatten()**2
             ])
-        _, gamma, lamb = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
-        self.lamb = torch.from_numpy(lamb[:(self.k-1)]).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
-        self.z.data = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y 
+        _, gamma, lamb, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        # self.lamb = torch.from_numpy(lamb[:(self.k-1)]).to( device=self.lamb.device, dtype=self.lamb.dtype )
+        # self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
+        self.z.data = torch.from_numpy(z[:-1])  # ~~~ z = Q(\lambda)^{-1}y 
     #
     # ~~~ Solve the dual problem in epigraph form using Simon's suggestion of a linear (rather than non-convex quadratic) epigraph constraint
-    def ell_infty_S_Lemma( self, *args, **kwargs ):
+    def S_Lemma_2( self, *args, **kwargs ):
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
         H_o = np.zeros(( m+1, m+1 ))
@@ -128,17 +128,15 @@ class dual_spline(spline):
         c_I = np.vstack([
                 np.zeros(( self.k-1, m+1 )),
                 np.hstack([ np.eye(m), -np.ones((m,1)) ]),
-                np.hstack([ -np.eye(m), -np.ones((m,1)) ]),
+                np.hstack([ -np.eye(m), -np.ones((m,1)) ])
             ])
         d_I = np.concatenate([
                 np.zeros(self.k-1),
                 -self.y.cpu().numpy(),
                 self.y.cpu().numpy()
             ])
-        _, gamma, lamb = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
-        self.lamb = torch.from_numpy(lamb[:(self.k-1)]).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
-        self.z.data = torch.linalg.solve( self.Q, self.y ) 
+        problem, _, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        self.z.data = torch.from_numpy(z[:-1])
     #
     # ~~~ Solve a semi-definite relaxation of the dual problem
     def ell_infty_rank_relaxation( self, *args, **kwargs ):
@@ -162,25 +160,24 @@ class dual_spline(spline):
         _, X, x = solve_rank_relaxation_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         self.z.data = torch.from_numpy(x[:-1])
     #
-    # ~~~ Solve the dual problem in epigraph form
-    def S_Lemma( self, *args, **kwargs ):
+    # ~~~ Minimize \|z-y\|_2^2 subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0
+    def S_Lemma_3( self, *args, **kwargs ):
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
         H_o = np.eye(m)
         c_o = -self.y.cpu().numpy()
         d_o = (self.y**2).sum().item()
-        _, gamma, lamb = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[0.], *args, **kwargs )
-        self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
-        self.z.data = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y 
-        print(f"The dual max is {gamma}")
+        _, gamma, lamb, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[0.], *args, **kwargs )
+        # self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
+        # self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
+        self.z.data = torch.from_numpy(z)
     #
-    # ~~~ Solve (in epigraph form) the dual of the quadratic feasibility problem of the feasibility problem ||z-y||_2^2/m\leq\noise and |a[i].T@z|\leq|b[i].T^@z| for all i
-    def noisy_S_Lemma( self, noise=0.1, *args, **kwargs  ):
+    # ~~~ Minimize the constant functino 1 subject to \|z-y\|_2^2<=noise and (a[i].T@z)**2 - (b[i].T@z)**2 <= 0
+    def S_Lemma_4( self, noise=0.1, *args, **kwargs  ):
         #
-        # ~~~ Set the objective function to be identically zero
+        # ~~~ Set the objective function to be identically equal to 1.
         m = len(self.y)
-        d_o = 0
+        d_o = 1.
         c_o = np.zeros(m)
         H_o = np.eye(m)
         #
@@ -191,13 +188,14 @@ class dual_spline(spline):
         d_I = (self.k-1)*[0.] + [ (self.y.cpu()**2).mean().numpy() - noise ]
         #
         # ~~~ Solve the dual
-        _, gamma, lamb = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        _, _, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         #
         # ~~~ Process the results
-        self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        self.Q = torch.from_numpy( (lamb.reshape(-1,1,1)*H_I).sum(axis=0) ).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        self.z.data = torch.linalg.solve( self.Q, self.y*lamb[-1]/m )
-        print(f"The dual max is {gamma}")
+        # self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
+        # self.Q = torch.from_numpy( (lamb.reshape(-1,1,1)*H_I).sum(axis=0) ).to( device=self.lamb.device, dtype=self.lamb.dtype )
+        # self.z.data = torch.linalg.solve( self.Q, self.y*lamb[-1]/m )
+        # print(f"The dual max is {gamma}")
+        self.z.data = torch.from_numpy(z)
     #
     # ~~~ 
     def PGD_step(self):
@@ -206,7 +204,7 @@ class dual_spline(spline):
         self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
         z = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y 
         g = ((self.a@z)**2 - (self.b@z)**2).cpu().numpy()   # ~~~ \grad_\lambda F(\lambda)
-        objective_before_update = -torch.inner( self.z, self.y )
+        objective_before_update = -torch.inner( self.z, self.y ) + (self.y**2).sum()
         self.z.data = z
         self.lamb += self.lr*g
         # print( self.lamb, end="\n" )
@@ -232,7 +230,7 @@ class dual_spline(spline):
         self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
         z = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y 
         g = ((self.a@z)**2 - (self.b@z)**2).cpu().numpy()   # ~~~ \grad_\lambda F(\lambda)
-        objective_before_update = -torch.inner( self.z, self.y )
+        objective_before_update = -torch.inner( self.z, self.y ) + (self.y**2).sum()
         g *= self.lr
         self.z.data = z
         #
@@ -252,21 +250,11 @@ class dual_spline(spline):
             self.lr /= (1+0.1)
         else:
             # print("increasing learning rate")
-            self.lr *= (1+0.1)
+            self.lr *= (1+0.001)
             alpha = 2/(self.t+2)
             self.lamb = (1-alpha)*self.lamb + alpha*torch.from_numpy(s.value).to( device=self.lamb.device, dtype=self.lamb.dtype )
             self.t += 1
         return objective_before_update, duality_gap
-    #
-    # ~~~
-    # def forward(self, x):
-    #     #
-    #     # ~~~ Compute the dual solution
-    #     self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
-    #     self.z = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y
-    #     #
-    #     # ~~~ Compute the primal solution
-    #     # return
 
 if __name__ == "__main__":
     #
@@ -307,7 +295,7 @@ if __name__ == "__main__":
     #
     # ~~~ Solve using the S-lemma
     if N is None:
-        v.ell_infty_S_Lemma( eps_abs=1e-3, eps_rel=1e-3 ) if noise is None else v.noisy_S_Lemma( noise, eps_abs=1e-2, eps_rel=1e-2, eps_infeas=1e-2  )
+        v.S_Lemma_1( eps_abs=1e-2, eps_rel=1e-2 ) if noise is None else v.noisy_S_Lemma( noise, eps_abs=1e-2, eps_rel=1e-2, eps_infeas=1e-2  )
         best_z = v.z.data.clone()
     if N is not None:
         best_error = float("inf")
