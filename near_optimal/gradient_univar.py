@@ -72,13 +72,13 @@ class spline(nn.Module):
     def forward( self, x ):
         nodes = self.compute_break_points()
         indices = torch.searchsorted( nodes, x )
-        a = torch.zeros_like(self.d)
+        c = torch.zeros_like(self.d)
         s = torch.zeros_like(self.d)
         for j in range(self.k):
             j += 1
-            a[j-1] = (self.z[2*j-1] + self.z[2*j-1-1]) / 2              # ~~~ (z_{2j} + z_{2j-1}) / 2
             s[j-1] = (self.z[2*j-1] - self.z[2*j-1-1]) / self.d[j-1]    # ~~~ (z_{2j} - z_{2j-1}) / (x_{2j} - x_{2j-1})
-        return a[indices] + s[indices] * (x - self.m[indices])
+            c[j-1] = self.z[2*j-1] - s[j-1]*self.x[2*j-1]
+        return s[indices]*x + c[indices]
     #
     # ~~~ Project z onto the set of z's that satisfy \|z-y\|_{\ell^\infty}\leq\eta
     def ell_infty_projection( self, eta=0.1 ):
