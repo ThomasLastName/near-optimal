@@ -2,13 +2,14 @@
 import torch
 from torch import nn
 from near_optimal.gradient_univar import spline
-from near_optimal.PGD_univar import CarefulNet
+from near_optimal.PGD_univar import RigorousNet
 import cvxpy as cp
 import numpy as np
+from scipy.sparse.linalg import eigsh
 from tqdm.auto import tqdm, trange
 from matplotlib import pyplot as plt
 from quality_of_life.my_plt_utils import points_with_curves, GifMaker
-from quality_of_life.my_base_utils import support_for_progress_bars
+from quality_of_life.my_base_utils import support_for_progress_bars, my_warn
 from quality_of_life.my_cvx_utils import solve_dual_of_QCQP, solve_rank_relaxation_of_QCQP
 
 
@@ -77,66 +78,73 @@ def build_a_j(x,j):
     a_j[2*j-1-1] = a_2jm1   # ~~~ a^{(j)}_{2j-1}
     return a_j
 
-class dual_spline(spline):
+class DualSpline(spline):
     def __init__( self, x, y, eps=1e-6, lr=1e-2 ):
         super().__init__(x,y)
         self.y = y
-        self.lamb = torch.randn(k-1).to( device=x.device, dtype=x.dtype )**2
-        self.a = torch.stack( [ build_a_j(x,j) for j in range(k-1) ] )
-        self.b = torch.stack( [ build_b_j(x,j) for j in range(k-1) ] )
-        self.bbt_minus_aat = torch.stack([ torch.outer(self.b[j],self.b[j]) - torch.outer(self.a[j],self.a[j]) for j in range(k-1) ])
+        self.lamb = torch.randn(self.k-1).to( device=x.device, dtype=x.dtype )**2
+        self.a = torch.stack( [ build_a_j(x,j) for j in range(self.k-1) ] )
+        self.b = torch.stack( [ build_b_j(x,j) for j in range(self.k-1) ] )
+        self.bbt_minus_aat = torch.stack([ torch.outer(self.b[j],self.b[j]) - torch.outer(self.a[j],self.a[j]) for j in range(self.k-1) ])
         self.t = 0  # ~~~ iterations completed thus far of the Frank-Wolfe algorithm
         self.eps = eps
         self.lr = lr
         # self.optimizer = torch.optim.Adam( [self.lamb], lr=lr )
     #
-    # ~~~ Solve the dual problem in of minimize t subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0 and (z_j-y_j)**2 - t^2 \leq 0
-    def S_Lemma_1( self, *args, **kwargs ):
+    # ~~~ Solve the dual problem of minimize t^a+MSE(y,z)/m subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0 and (z_j-y_j)**2 - t^b \leq 0
+    def S_Lemma_1( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, **kwargs ):
+        if t_squared_constraint and not t_squared_objective: my_warn("Minimizing t subject to |y_j-z_j|^2 \leq t^2 ain't good...")
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
-        H_o = np.zeros(( m+1, m+1 ))
-        c_o = np.array( m*[0.] + [1.] )
-        d_o = 0.
+        H_o = np.diag(np.concatenate([ (mse_penalty/m)*np.ones(m), [1. if t_squared_objective else 0.] ]))
+        c_o = np.concatenate([ -(mse_penalty/m)*self.y.cpu().numpy(), [0. if t_squared_objective else 1/2] ])
+        d_o = (mse_penalty/m)*(self.y**2).sum().item()
         H_I = np.concatenate([
                 np.pad( aat_minus_bbt, ( (0,0), (0,1), (0,1) ) ),   # ~~~ pad the "actual constraints" with zero for the epigraph variable
-                np.stack([ np.diag( j*[0.] + [1.] + (m-j-1)*[0.] + [-1.] ) for j in range(m)  ])
+                np.stack([ np.diag( j*[0.] + [1.] + (m-j-1)*[0.] + [-1. if t_squared_constraint else 0.] ) for j in range(m)  ])
             ])
         c_I = np.vstack([
                 np.zeros(( self.k-1, m+1 )),
-                np.hstack(( np.diag(-self.y.cpu().numpy().flatten()), np.zeros((m,1)) ))
+                np.hstack(( np.diag(-self.y.cpu().numpy().flatten()), -(not t_squared_constraint)*np.ones((m,1))/2 ))
             ])
         d_I = np.concatenate([
-                np.zeros(self.k-1),
+                breakpoint_reg*np.ones(self.k-1),
                 self.y.cpu().numpy().flatten()**2
             ])
-        _, gamma, lamb, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        problem, lamb, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         # self.lamb = torch.from_numpy(lamb[:(self.k-1)]).to( device=self.lamb.device, dtype=self.lamb.dtype )
         # self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
         self.z.data = torch.from_numpy(z[:-1])  # ~~~ z = Q(\lambda)^{-1}y 
+        return problem
     #
     # ~~~ Solve the dual problem in epigraph form using Simon's suggestion of a linear (rather than non-convex quadratic) epigraph constraint
-    def S_Lemma_2( self, *args, **kwargs ):
+    def S_Lemma_2( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=False, breakpoint_reg=0, **kwargs ):
+        if t_squared_constraint and not t_squared_objective: my_warn("Minimizing t subject to |y_j-z_j| \leq t^2 ain't good...")
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
-        H_o = np.zeros(( m+1, m+1 ))
-        c_o = np.array( m*[0.] + [1.] )
-        d_o = 0.
+        H_o = np.diag(np.concatenate([ (mse_penalty/m)*np.ones(m), [1. if t_squared_objective else 0.] ]))
+        c_o = np.concatenate([ -(mse_penalty/m)*self.y.cpu().numpy(), [0. if t_squared_objective else 1/2] ])
+        d_o = (mse_penalty/m)*(self.y**2).sum().item()
         H_I = np.concatenate([
                 np.pad( aat_minus_bbt, ((0,0),(0,1),(0,1)) ),   # ~~~ pad the "actual constraints" with zero for the epigraph variable
                 np.zeros(( 2*m, m+1, m+1 ))
             ])
+        if t_squared_constraint:
+            for j in range(2*m):
+                H_I[ k-1+j, -1, -1 ] = -1.
         c_I = np.vstack([
                 np.zeros(( self.k-1, m+1 )),
-                np.hstack([ np.eye(m), -np.ones((m,1)) ]),
-                np.hstack([ -np.eye(m), -np.ones((m,1)) ])
+                np.hstack([ np.eye(m)/2, -(not t_squared_constraint)*np.ones((m,1)) ])/2,
+                np.hstack([ -np.eye(m)/2, -(not t_squared_constraint)*np.ones((m,1)) ])/2
             ])
         d_I = np.concatenate([
-                np.zeros(self.k-1),
+                breakpoint_reg*np.ones(self.k-1),
                 -self.y.cpu().numpy(),
                 self.y.cpu().numpy()
             ])
-        problem, _, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        problem, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         self.z.data = torch.from_numpy(z[:-1])
+        return problem
     #
     # ~~~ Solve a semi-definite relaxation of the dual problem
     def ell_infty_rank_relaxation( self, *args, **kwargs ):
@@ -160,19 +168,50 @@ class dual_spline(spline):
         _, X, x = solve_rank_relaxation_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         self.z.data = torch.from_numpy(x[:-1])
     #
-    # ~~~ Minimize \|z-y\|_2^2 subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0
-    def S_Lemma_3( self, *args, **kwargs ):
+    # ~~~ Minimize (mse_penalty/m)*\|z-y\|_2^2 subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0
+    def S_Lemma_3( self, *args, mse_penalty=1, breakpoint_reg=0., **kwargs ):
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
-        H_o = np.eye(m)
-        c_o = -self.y.cpu().numpy()
-        d_o = (self.y**2).sum().item()
-        _, gamma, lamb, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[0.], *args, **kwargs )
+        H_o = (mse_penalty/m)*np.eye(m)
+        c_o = -(mse_penalty/m)*self.y.cpu().numpy()
+        d_o = (mse_penalty/m)*(self.y**2).sum().item()
+        problem, lamb, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, **kwargs )
         # self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
         # self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
         self.z.data = torch.from_numpy(z)
+        return problem
     #
-    # ~~~ Minimize the constant functino 1 subject to \|z-y\|_2^2<=noise and (a[i].T@z)**2 - (b[i].T@z)**2 <= 0
+    # ~~~ Generic function that calls the appropriate one of the preceding methods
+    def solve_dual_for_z( self, *args, mse_penalty=1, epigraph_constraint=None, epigraph_objective=None, **kwargs ):
+        #
+        # ~~~ Three constraints are possible
+        allowed_epigraph_constraints = (None, "linear", "quadratic")
+        if not epigraph_constraint in allowed_epigraph_constraints:
+            raise ValueError(f"epigraph_constraint must be one of {allowed_epigraph_constraints}")
+        #
+        # ~~~ Three objectives are possible
+        allowed_epigraph_objectives = (None, "linear", "quadratic")
+        if not epigraph_objective in allowed_epigraph_objectives:
+            raise ValueError(f"epigraph_objectives must be one of {allowed_epigraph_objectives}")
+        #
+        # ~~~ Solve the dual of MSE minimization
+        if (epigraph_objective is None) or (epigraph_constraint is None):
+            if not ((epigraph_objective is None) and (epigraph_constraint is None)):
+                my_warn("`epigraph_objective` and `epigraph_constraint` are not both `None`, although one is. Both will be interpreted as `None`.")
+                self.S_Lemma_3( *args, mse_penalty=mse_penalty, **kwargs )
+        #
+        # ~~~ Solve the dual of max norm minimization in epigraph form, possibly also penalizing MSE in the objective function
+        if epigraph_constraint == "linear":
+            self.S_Lemma_2( *args, mse_penalty=mse_penalty, quadratic_objective=(epigraph_objective=="quadratic") **kwargs )
+        else:
+            self.S_Lemma_1( *args, mse_penalty=mse_penalty, quadratic_objective=(epigraph_objective=="quadratic") **kwargs )
+        #
+        # ~~~ Diagnostics
+        worst_offender = self.compute_violation().min().item()
+        if worst_offender<1:
+            my_warn(f"The approximate primal solution fails to define an element of V (error is roughly {1-worst_offender}). If a primal solution is desired, try specifying a slightly larger (but still very small) value for the argument `breakpoint_reg` (default is 0)")
+    #
+    # ~~~ Minimize the constant function 1 subject to \|z-y\|_2^2<=noise and (a[i].T@z)**2 - (b[i].T@z)**2 <= 0
     def S_Lemma_4( self, noise=0.1, *args, **kwargs  ):
         #
         # ~~~ Set the objective function to be identically equal to 1.
@@ -188,7 +227,7 @@ class dual_spline(spline):
         d_I = (self.k-1)*[0.] + [ (self.y.cpu()**2).mean().numpy() - noise ]
         #
         # ~~~ Solve the dual
-        _, _, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        _, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         #
         # ~~~ Process the results
         # self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
@@ -196,6 +235,163 @@ class dual_spline(spline):
         # self.z.data = torch.linalg.solve( self.Q, self.y*lamb[-1]/m )
         # print(f"The dual max is {gamma}")
         self.z.data = torch.from_numpy(z)
+    #
+    # ~~~ Minimize t+mse_penalty*MSE(y,z) subject to |s_jx + c_j - y| \leq t for both data pairs (x,y), for j=1,...,k, and subject to p_j(s_1,...,s_k,c_1,...,c_k) \leq 0
+    def D_kappa( self, *args, M=0, kappa=0, mse_penalty=0, quadratic_objective=True, announce_eigenvalues=True, **kwargs ):
+        #
+        # ~~~ Define objects of the correct size
+        k = self.k
+        m = len(self.y)
+        H_o = np.diag(np.concatenate([ (mse_penalty/m)*np.ones(m), [1. if quadratic_objective else 0.] ])) #np.zeros((m+1,m+1))
+        c_o = np.concatenate([ -(mse_penalty/m)*self.y.cpu().numpy(), [0. if quadratic_objective else 1/2] ]) #np.array( 2*k*[0.] + [1/2] )
+        d_o = (mse_penalty/m)*(self.y**2).sum().item() #0
+        H_I = np.zeros(( k-1+2*m, 2*k+1, 2*k+1 ))
+        c_I = np.zeros(( k-1+2*m, 2*k+1 ))
+        d_I = np.zeros( k-1+2*m )
+        #
+        # ~~~ Safety feature
+        for j in range(k-1):
+            j += 1  # ~~~ use 1-based indexing j=1,...,k-1
+            delta_over_2 = (self.x[(2*j)-1] - self.x[(2*j-1)-1])/2          # ~~~ == (x_{2j} - x_{2j-1})/2
+            shifted_midpoint = (self.x[(2*j+1)-1] + self.x[(2*j)-1])/2 + M  # ~~~ == (x_{2j+1} + x_{2j})/2 + M
+            if abs(shifted_midpoint) < 1e-8:
+                my_warn("A midpoint of the shifted data is approximately zero. Consider toggling the value of M.")
+                break
+        #
+        # ~~~ Build the "actual constraints"
+        for j in range(k-1):
+            j += 1  # ~~~ use 1-based indexing j=1,...,k-1
+            delta_over_2 = (self.x[(2*j)-1] - self.x[(2*j-1)-1]).item()/2           # ~~~ == (x_{2j} - x_{2j-1})/2
+            shifted_midpoint = (self.x[(2*j+1)-1] + self.x[(2*j)-1]).item()/2 + M   # ~~~ == (x_{2j+1} + x_{2j})/2 + M
+            j -= 1  # ~~~ return to 0-based indexing
+            A = 1 - (delta_over_2/shifted_midpoint)**2
+            H_I[ j, j, j ]     =  A
+            H_I[ j, j, j+1 ]   = -A
+            H_I[ j, j+1, j ]   = -A
+            H_I[ j, j+1, j+1 ] =  A
+            B = 1/shifted_midpoint
+            H_I[ j, j, k+j ]     =  B
+            H_I[ j, j, k+j+1 ]   = -B
+            H_I[ j, j+1, k+j ]   = -B
+            H_I[ j, j+1, k+j+1 ] =  B
+            H_I[ j, k+j, j ]     =  B
+            H_I[ j, k+j+1, j ]   = -B
+            H_I[ j, k+j, j+1 ]   = -B
+            H_I[ j, k+j+1, j+1 ] =  B
+            C = 1/shifted_midpoint**2
+            H_I[ j, k+j, k+j ]     =  C
+            H_I[ j, k+j, k+j+1 ]   = -C
+            H_I[ j, k+j+1, k+j ]   = -C
+            H_I[ j, k+j+1, k+j+1 ] =  C
+            # penalty_coefficient = kappa/M if divide_by_M else kappa/abs(shifted_midpoint)
+            # H_I[ j, :, : ] += penalty_coefficient*np.eye(2*k+1)
+            smallest_eigenvalue, corresponding_eigenvector = eigsh( H_I[j,:,:], k=1, which='SA' )
+            H_I[ j, :, : ] += kappa*smallest_eigenvalue*np.eye(2*k+1)
+            if announce_eigenvalues: print(f"The Hessian of quadratic constraint {j+1}/{k-1} has smallest eigenvalue {smallest_eigenvalue[0]}.")
+        #
+        # ~~~ Build the epigraph constraints
+        for j in range(k):
+            for i in [1,0]:
+                j += 1  # ~~~ use 1-based indexing j=1,...,k
+                index_2j_minus_i = (2*j-i)-1
+                j -= 1  # ~~~ return to 0-based indexing
+                #
+                # ~~~ Add the constraint s_j*(x+M) + c_j - y - t \leq 0
+                evaluation_site = self.x[index_2j_minus_i].item()  # ~~~ == x_{2j-i}
+                training_label  = self.y[index_2j_minus_i].item()  # ~~~ == y_{2j-i}
+                c_I[ k-1+index_2j_minus_i, j   ] = (evaluation_site+M)
+                c_I[ k-1+index_2j_minus_i, k+j ] = 1
+                c_I[ k-1+index_2j_minus_i, -1  ] = -1
+                d_I[ k-1+index_2j_minus_i ] = -training_label
+                #
+                # ~~~ Add the constraint -s_j*(x+M) - c_j + y - t \leq 0
+                c_I[ k-1+m+index_2j_minus_i, j   ] = -(evaluation_site+M)
+                c_I[ k-1+m+index_2j_minus_i, k+j ] = -1
+                c_I[ k-1+m+index_2j_minus_i, -1  ] = -1
+                d_I[ k-1+m+index_2j_minus_i ] = training_label
+        #
+        # ~~~ Solve the dual
+        problem, _, s_c_t = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I/2, d_I=d_I, *args, **kwargs )
+        s, c, t = np.array_split( s_c_t, [k,2*k] )
+        for j in range(k):
+            for i in [1,0]:
+                j += 1  # ~~~ use 1-based indexing j=1,...,k
+                appropriate_index = (2*j-i)-1
+                j -= 1  # ~~~ return to 0-based indexing
+                with torch.no_grad(): self.z.data[appropriate_index] = s[j]*(self.x[appropriate_index]+M) + c[j]
+        print("")
+        print(f"t: {t}")
+        print(f"objective: {problem.objective.value}")
+        print("")
+        return problem
+    #
+    # ~~~ Minimize t+mse_penalty*MSE(y,z) subject to |s_jx + c_j - y| \leq t for both data pairs (x,y), for j=1,...,k, and subject to p_j(s_1,...,s_k,c_1,...,c_k) \leq 0
+    def D_kappa_1( self, *args, M=0, mse_penalty=0, quadratic_objective=False, announce_eigenvalues=True, **kwargs ):
+        #
+        # ~~~ Define objects of the correct size
+        k = self.k
+        s = cp.Variable(k)
+        c = cp.Variable(k)
+        t = cp.Variable()
+        alpha = cp.Variable(k-1)
+        epigraph_objective = t**2 if quadratic_objective else t
+        if mse_penalty>0: epigraph_objective = epigraph_objective + mse_penalty*cp.sum_squares( self.y.cpu().numpy() - self.z.detach().cpu().numpy() )
+        objective = cp.Minimize( epigraph_objective )
+        constraints = [ t>=0 ]
+        #
+        # ~~~ Safety feature
+        for j in range(k-1):
+            j += 1  # ~~~ use 1-based indexing j=1,...,k-1
+            delta_over_2 = (self.x[(2*j)-1] - self.x[(2*j-1)-1]).item()/2           # ~~~ == (x_{2j} - x_{2j-1})/2
+            shifted_midpoint = (self.x[(2*j+1)-1] + self.x[(2*j)-1]).item()/2 + M   # ~~~ == (x_{2j+1} + x_{2j})/2 + M
+            if abs(shifted_midpoint) < 1e-8:
+                my_warn("A midpoint of the shifted data is approximately zero. Consider toggling the value of M.")
+                break
+        #
+        # ~~~ Build the "actual constraints"
+        for j in range(k-1):
+            j += 1  # ~~~ use 1-based indexing j=1,...,k-1
+            delta_over_2 = (self.x[(2*j)-1] - self.x[(2*j-1)-1]).item()/2           # ~~~ == (x_{2j} - x_{2j-1})/2
+            shifted_midpoint = (self.x[(2*j+1)-1] + self.x[(2*j)-1]).item()/2 + M   # ~~~ == (x_{2j+1} + x_{2j})/2 + M
+            j -= 1  # ~~~ return to 0-based indexing
+            A = 1 - (delta_over_2/shifted_midpoint)**2
+            B = 1/shifted_midpoint
+            C = 1/shifted_midpoint**2
+            H = np.array([
+                    [  A, -A,  B, -B ],
+                    [ -A,  A, -B,  B ],
+                    [  B, -B,  C, -C ],
+                    [ -B,  B, -C,  C ]
+                ])
+            smallest_eigenvalue, corresponding_eigenvector = eigsh( H, k=1, which='SA' )
+            corresponding_eigenvector = corresponding_eigenvector.flatten()
+            if announce_eigenvalues: print(f"The Hessian of quadratic constraint {j+1}/{k-1} has smallest eigenvalue {smallest_eigenvalue[0]}.")
+            constraints += [
+                s[j]   == alpha[j]*corresponding_eigenvector[0],
+                s[j+1] == alpha[j]*corresponding_eigenvector[1],
+                c[j]   == alpha[j]*corresponding_eigenvector[2],
+                c[j+1] == alpha[j]*corresponding_eigenvector[3]
+            ]
+        #
+        # ~~~ Build the epigraph constraints
+        for j in range(k):
+            for i in [1,0]:
+                j += 1  # ~~~ use 1-based indexing j=1,...,k
+                index_2j_minus_i = (2*j-i)-1
+                j -= 1  # ~~~ return to 0-based indexing
+                evaluation_site = self.x[index_2j_minus_i].item()  # ~~~ == x_{2j-i}
+                training_label  = self.y[index_2j_minus_i].item()  # ~~~ == y_{2j-i}
+                #
+                # ~~~ Add the constraint s_j*(x+M) + c_j - y - t \leq 0
+                constraints.append( s[j]*(evaluation_site+M) + c[j] - training_label - t <= 0 )
+                #
+                # ~~~ Add the constraint -s_j*(x+M) - c_j + y - t \leq 0                
+                constraints.append( -s[j]*(evaluation_site+M) - c[j] + training_label - t <= 0 )
+        #
+        # ~~~ Solve it
+        problem = cp.Problem( objective, constraints )
+        problem.solve( *args, **kwargs )
+        return problem
     #
     # ~~~ 
     def PGD_step(self):
@@ -256,19 +452,21 @@ class dual_spline(spline):
             self.t += 1
         return objective_before_update, duality_gap
 
+#
+# ~~~ Config
+torch.manual_seed(2025)
+torch.set_default_dtype(torch.double)
+k = 15
+m =  2*k
+f = lambda x: torch.sin(2*torch.pi*x)
+noise_level = 0.1
+x_train = torch.linspace(-1,1,m)
+y_train = f(x_train) + noise_level*torch.randn_like(x_train)
+x_test = torch.linspace(-1,1,1001)
+y_test = f(x_test)
+
 if __name__ == "__main__":
-    #
-    # ~~~ Config
-    torch.manual_seed(2025)
-    k = 15
-    m =  2*k
-    f = lambda x: torch.sin(2*torch.pi*x)
-    noise_level = 0.1
-    x_train = torch.linspace(-1,1,m)
-    y_train = f(x_train) + noise_level*torch.randn_like(x_train)
-    x_test = torch.linspace(-1,1,1001)
-    y_test = f(x_test)
-    v = dual_spline( x_train, y_train )
+    v = DualSpline( x_train, y_train )
     v.z.data = torch.randn(m)
     N = None
     noise = None
@@ -295,7 +493,7 @@ if __name__ == "__main__":
     #
     # ~~~ Solve using the S-lemma
     if N is None:
-        v.S_Lemma_1( eps_abs=1e-2, eps_rel=1e-2 ) if noise is None else v.noisy_S_Lemma( noise, eps_abs=1e-2, eps_rel=1e-2, eps_infeas=1e-2  )
+        val = v.D_kappa( M=2, kappa=1, quadratic_objective=True, mse_penalty=0 )
         best_z = v.z.data.clone()
     if N is not None:
         best_error = float("inf")
@@ -319,11 +517,18 @@ if __name__ == "__main__":
                         best_z = v.z.data.clone()
         pbar.close()
     v.z.data = best_z
-    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="MSE Minimization Subject to Constraints on the Location of Breakpoints" )
+    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="The Result of Some Quadratic Program" )
     with torch.no_grad():
         nodes = v.compute_break_points()
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
     plt.show()
+    my_s = np.zeros(k)
+    my_c = np.zeros(k)
+    for j in range(k):
+        my_s[j] = (v.z[2*(j+1)-2] - v.z[2*(j+1)-1]) / (x_train[2*(j+1)-2] - x_train[2*(j+1)-1])
+        my_c[j] = v.z[2*(j+1)-1] - my_s[j]*x_train[2*(j+1)-1]
+
+if False:
     #
     # ~~~ Try taking that as the initialization for a ReLU network
     v = CarefulNet(x_train)
