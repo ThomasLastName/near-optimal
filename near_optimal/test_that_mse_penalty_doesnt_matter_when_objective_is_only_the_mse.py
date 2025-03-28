@@ -28,7 +28,7 @@ with support_for_progress_bars():
         for tol, breakpoint_reg in tqdm( product(TOL,BREAKPOINT_REG), total=len(TOL)*len(BREAKPOINT_REG), desc="MSE Minimization", ascii=" >=" ):
             #
             # ~~~ Solve the dual
-            dual_max = v.S_Lemma_3( mse_penalty=mse_penalty, solver=cvx.SCS, eps_abs=tol, eps_rel=tol, eps_infeas=tol/1000, breakpoint_reg=breakpoint_reg, print_info=False ).objective.value
+            dual_max = v.solve_dual_of_mse_minimization( mse_penalty=mse_penalty, solver=cvx.SCS, eps_abs=tol, eps_rel=tol, eps_infeas=tol/1000, breakpoint_reg=breakpoint_reg, print_info=False ).objective.value
             #
             # ~~~ Append the results as a new row in the DataFrame
             lst.append(dual_max)

@@ -168,16 +168,14 @@ class DualSpline(spline):
         _, X, x = solve_rank_relaxation_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         self.z.data = torch.from_numpy(x[:-1])
     #
-    # ~~~ Minimize (mse_penalty/m)*\|z-y\|_2^2 subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0
-    def S_Lemma_3( self, *args, mse_penalty=1, breakpoint_reg=0., **kwargs ):
+    # ~~~ Minimize MSE(z,y) subject to (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 for all i = 1,...,k-1
+    def solve_dual_of_mse_minimization( self, *args, breakpoint_reg=0., **kwargs ):
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
-        H_o = (mse_penalty/m)*np.eye(m)
-        c_o = -(mse_penalty/m)*self.y.cpu().numpy()
-        d_o = (mse_penalty/m)*(self.y**2).sum().item()
-        problem, lamb, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, **kwargs )
-        # self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        # self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
+        H_o = (1/m)*np.eye(m)
+        c_o = -(1/m)*self.y.cpu().numpy()
+        d_o = (1/m)*(self.y**2).sum().item()
+        problem, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, **kwargs )
         self.z.data = torch.from_numpy(z)
         return problem
     #
@@ -185,20 +183,14 @@ class DualSpline(spline):
     def solve_dual_for_z( self, *args, mse_penalty=1, epigraph_constraint=None, epigraph_objective=None, **kwargs ):
         #
         # ~~~ Three constraints are possible
-        allowed_epigraph_constraints = (None, "linear", "quadratic")
+        allowed_epigraph_constraints = ("linear", "quadratic")
         if not epigraph_constraint in allowed_epigraph_constraints:
             raise ValueError(f"epigraph_constraint must be one of {allowed_epigraph_constraints}")
         #
         # ~~~ Three objectives are possible
-        allowed_epigraph_objectives = (None, "linear", "quadratic")
+        allowed_epigraph_objectives = ("linear", "quadratic")
         if not epigraph_objective in allowed_epigraph_objectives:
             raise ValueError(f"epigraph_objectives must be one of {allowed_epigraph_objectives}")
-        #
-        # ~~~ Solve the dual of MSE minimization
-        if (epigraph_objective is None) or (epigraph_constraint is None):
-            if not ((epigraph_objective is None) and (epigraph_constraint is None)):
-                my_warn("`epigraph_objective` and `epigraph_constraint` are not both `None`, although one is. Both will be interpreted as `None`.")
-                self.S_Lemma_3( *args, mse_penalty=mse_penalty, **kwargs )
         #
         # ~~~ Solve the dual of max norm minimization in epigraph form, possibly also penalizing MSE in the objective function
         if epigraph_constraint == "linear":
@@ -325,8 +317,8 @@ class DualSpline(spline):
         print("")
         return problem
     #
-    # ~~~ Minimize t+mse_penalty*MSE(y,z) subject to |s_jx + c_j - y| \leq t for both data pairs (x,y), for j=1,...,k, and subject to p_j(s_1,...,s_k,c_1,...,c_k) \leq 0
-    def D_kappa_1( self, *args, M=0, mse_penalty=0, quadratic_objective=False, announce_eigenvalues=True, **kwargs ):
+    # ~~~ Minimize t+mse_penalty*MSE(y,z) subject to |s_jx + c_j - y| \leq t for both data pairs (x,y), for j=1,...,k, and subject to p_j(s_1,...,c_k) + \kappa\|s_1,...,s_k\|^2 \leq 0 which is equivalent to (s_1,...,c_k) lying in the eigenspace of p_j's Hessian's smallest eigenvalue, which we enforce as a linear equality constraint
+    def P_kappa_1( self, *args, M=0, mse_penalty=0, quadratic_objective=False, announce_eigenvalues=True, **kwargs ):
         #
         # ~~~ Define objects of the correct size
         k = self.k
