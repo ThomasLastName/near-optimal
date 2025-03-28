@@ -91,6 +91,17 @@ class DualSpline(spline):
         self.lr = lr
         # self.optimizer = torch.optim.Adam( [self.lamb], lr=lr )
     #
+    # ~~~ Minimize MSE(z,y) subject to (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 for all i = 1,...,k-1
+    def solve_dual_of_mse_minimization( self, *args, breakpoint_reg=0., **kwargs ):
+        aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
+        m = len(self.y)
+        H_o = (1/m)*np.eye(m)
+        c_o = -(1/m)*self.y.cpu().numpy()
+        d_o = (1/m)*(self.y**2).sum().item()
+        problem, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, **kwargs )
+        self.z.data = torch.from_numpy(z)
+        return problem
+    #
     # ~~~ Solve the dual problem of minimize t^a+MSE(y,z)/m subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0 and (z_j-y_j)**2 - t^b \leq 0
     def S_Lemma_1( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, **kwargs ):
         if t_squared_constraint and not t_squared_objective: my_warn("Minimizing t subject to |y_j-z_j|^2 \leq t^2 ain't good...")
@@ -167,17 +178,6 @@ class DualSpline(spline):
             ])
         _, X, x = solve_rank_relaxation_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         self.z.data = torch.from_numpy(x[:-1])
-    #
-    # ~~~ Minimize MSE(z,y) subject to (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 for all i = 1,...,k-1
-    def solve_dual_of_mse_minimization( self, *args, breakpoint_reg=0., **kwargs ):
-        aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
-        m = len(self.y)
-        H_o = (1/m)*np.eye(m)
-        c_o = -(1/m)*self.y.cpu().numpy()
-        d_o = (1/m)*(self.y**2).sum().item()
-        problem, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, **kwargs )
-        self.z.data = torch.from_numpy(z)
-        return problem
     #
     # ~~~ Generic function that calls the appropriate one of the preceding methods
     def solve_dual_for_z( self, *args, mse_penalty=1, epigraph_constraint=None, epigraph_objective=None, **kwargs ):
