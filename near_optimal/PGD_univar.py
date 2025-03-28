@@ -35,27 +35,32 @@ if __name__=="__main__":
     #
     # ~~~ Config
     torch.manual_seed(2024)
-    k = 5
-    m =  2*k
-    f = lambda x: torch.sin(2*torch.pi*x)
-    scale = 0.1
-    x_train = torch.linspace(-1,1,m).reshape(-1,1)
-    y_train = f(x_train) + scale*torch.randn_like(x_train)
-    x_test = torch.linspace(-1,1,1001)
-    y_test = f(x_test)
+    # k = 5
+    # m =  2*k
+    # f = lambda x: torch.sin(2*torch.pi*x)
+    # scale = 0.1
+    # x_train = torch.linspace(-1,1,m).reshape(-1,1)
+    # y_train = f(x_train) + scale*torch.randn_like(x_train)
+    # x_test = torch.linspace(-1,1,1001)
+    # y_test = f(x_test)
+    from near_optimal.quadratic_univar import f, x_train, y_train
+    x_train = x_train.reshape(-1,1)
+    y_train = y_train.reshape(-1,1)
     #
     # ~~~ Create and train the model
     model = RigorousNet(x_train)
     lr = 1e-2
-    N = 30000
+    N = 50000
     how_often = 100
     optimizer = torch.optim.Adam( model.parameters(), lr=lr )
+    scheduler = torch.optim.lr_scheduler.StepLR( optimizer, step_size=5000, gamma=0.3 )
     #
     # ~~~ Gradient Descent
     history = []
     fig, ax = points_with_curves( x=x_train.squeeze(),  y=y_train.squeeze(), grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(model,f), title=r"$\ell^\infty$ Error Minimization with Hard Constraints", show=False )
     gif = GifMaker()
     gif.capture()
+    best_error = torch.inf
     with support_for_progress_bars():
         pbar = tqdm( desc="Using Gradient Descent", total=N, ascii=' >=' )
         for i in range(N):
@@ -65,9 +70,13 @@ if __name__=="__main__":
             optimizer.step()
             optimizer.zero_grad()
             model.project()
+            best_error = min( best_error, max_error.item() )
             _ = pbar.update()
             history.append(max_error.item())
-            pbar.set_postfix({ "max_error" : f"{history[-1]:<4.4f}" })
+            pbar.set_postfix({
+                    "max_error" : f"{history[-1]:<4.4f}",
+                    "best_error" : f"{best_error:<4.4f}"
+                })
             if (i+1)%how_often==0:
                 fig, ax = points_with_curves( x=x_train.squeeze(),  y=y_train.squeeze(), grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(model,f), title=r"$\ell^\infty$ Error Minimization with Hard Constraints", show=False, fig=fig, ax=ax )
                 gif.capture()
