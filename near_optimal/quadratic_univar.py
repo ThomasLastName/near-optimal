@@ -92,24 +92,50 @@ class DualSpline(spline):
         # self.optimizer = torch.optim.Adam( [self.lamb], lr=lr )
     #
     # ~~~ Minimize MSE(z,y) subject to (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 for all i = 1,...,k-1
-    def solve_dual_of_mse_minimization( self, *args, breakpoint_reg=0., **kwargs ):
+    def solve_dual_of_mse_minimization( self, *args, breakpoint_reg=0., weighted_mean=False, **kwargs ):
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
-        H_o = (1/m)*np.eye(m)
-        c_o = -(1/m)*self.y.cpu().numpy()
-        d_o = (1/m)*(self.y**2).sum().item()
-        problem, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, **kwargs )
+        if weighted_mean:
+            c = cp.Variable(m)
+            constraints = [ c>=0, cp.sum(c)==1 ]
+        else:
+            constraints = []
+        H_o = (1/m)*np.eye(m) if not weighted_mean else cp.diag(c)
+        c_o = -(1/m)*self.y.cpu().numpy() if not weighted_mean else -cp.multiply( c, self.y.cpu().numpy() )
+        d_o = (1/m)*(self.y**2).sum().item() if not weighted_mean else cp.sum(cp.multiply( c, self.y.cpu().numpy()**2 ))
+        problem, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, constraints=constraints, **kwargs )
         self.z.data = torch.from_numpy(z)
         return problem
     #
     # ~~~ Solve the dual problem of minimize t^a+MSE(y,z)/m subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0 and (z_j-y_j)**2 - t^b \leq 0
-    def S_Lemma_1( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, non_negative_epigraph=True, **kwargs ):
+    def S_Lemma_1( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, non_negative_epigraph=True, weighted_mean=False, **kwargs ):
         if t_squared_constraint and not (t_squared_objective or non_negative_epigraph): my_warn("Minimizing t subject to |y_j-z_j|^2 \leq t^2 ain't good...")
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
-        H_o = np.diag(np.concatenate([ (mse_penalty/m)*np.ones(m), [1. if t_squared_objective else 0.] ]))
-        c_o = np.concatenate([ -(mse_penalty/m)*self.y.cpu().numpy(), [0. if t_squared_objective else 1/2] ])
-        d_o = (mse_penalty/m)*(self.y**2).sum().item()
+        use_uniform_weights = mse_penalty==0 or not weighted_mean
+        if use_uniform_weights:
+            weights = (mse_penalty/m)*np.ones(m)*np.ones(m)
+            constraints = []
+            if weighted_mean: my_warn("`weighted_mean=True` will be ignored because `mse_penalty==0`.")
+        else:
+            weights = cp.Variable(m)
+            constraints = [ weights>=0, cp.sum(weights)==mse_penalty ]  # ~~~ the usual MSE occurs if weights==1/m
+        #
+        # ~~~ Build objective function t^(t_squared_objective+1) + \sum_j weights[j]*(z_j-y_j)^2
+        concatenate = np.concatenate if use_uniform_weights else cp.hstack
+        diag = np.diag if use_uniform_weights else cp.diag
+        multiply = np.multiply if use_uniform_weights else cp.multiply
+        H_o = diag(concatenate([
+                weights,
+                [1. if t_squared_objective else 0.]
+            ]))
+        c_o = concatenate([
+                -multiply( weights, self.y.cpu().numpy() ),
+                [0. if t_squared_objective else 1/2]
+            ])
+        d_o = sum(multiply( weights, self.y.cpu().numpy()**2 ))
+        #
+        # ~~~ Build constraints (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 and (z_j-y_j)**2 - t^2 \leq 0
         H_I = np.concatenate([
                 np.pad( aat_minus_bbt, ( (0,0), (0,1), (0,1) ) ),   # ~~~ pad the "actual constraints" with zero for the epigraph variable
                 np.stack([ np.diag( j*[0.] + [1.] + (m-j-1)*[0.] + [-1. if t_squared_constraint else 0.] ) for j in range(m)  ])
@@ -122,22 +148,47 @@ class DualSpline(spline):
                 breakpoint_reg*np.ones(self.k-1),
                 self.y.cpu().numpy().flatten()**2
             ])
+        #
+        # ~~~ Add the constraint t \geq 0, if desired
         if non_negative_epigraph:
             H_I = np.concatenate([ H_I, np.zeros((1,m+1,m+1)) ])
             c_I = np.concatenate([ c_I, np.array(m*[0.] + [-1.]).reshape(1,m+1) ])
             d_I = np.concatenate([ d_I, [0.] ])
-        problem, _, zt = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        #
+        # ~~~ Solve it
+        problem, _, zt = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, constraints=constraints, **kwargs )
         self.z.data = torch.from_numpy(zt[:-1])  # ~~~ z = Q(\lambda)^{-1}y 
         return problem
     #
     # ~~~ Solve the dual problem in epigraph form using Simon's suggestion of a linear (rather than non-convex quadratic) epigraph constraint
-    def S_Lemma_2( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, non_negative_epigraph=True, **kwargs ):
+    def S_Lemma_2( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, non_negative_epigraph=True, weighted_mean=False, **kwargs ):
         if t_squared_constraint and not (t_squared_objective or non_negative_epigraph): my_warn("Minimizing t subject to |y_j-z_j| \leq t^2 ain't good...")
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
-        H_o = np.diag(np.concatenate([ (mse_penalty/m)*np.ones(m), [1. if t_squared_objective else 0.] ]))
-        c_o = np.concatenate([ -(mse_penalty/m)*self.y.cpu().numpy(), [0. if t_squared_objective else 1/2] ])
-        d_o = (mse_penalty/m)*(self.y**2).sum().item()
+        use_uniform_weights = mse_penalty==0 or not weighted_mean
+        if use_uniform_weights:
+            weights = (mse_penalty/m)*np.ones(m)*np.ones(m)
+            constraints = []
+            if weighted_mean: my_warn("`weighted_mean=True` will be ignored because `mse_penalty==0`.")
+        else:
+            weights = cp.Variable(m)
+            constraints = [ weights>=0, cp.sum(weights)==mse_penalty ]  # ~~~ the usual MSE occurs if weights==1/m
+        #
+        # ~~~ Build objective function t^(t_squared_objective+1) + \sum_j weights[j]*(z_j-y_j)^2
+        concatenate = np.concatenate if use_uniform_weights else cp.hstack
+        diag = np.diag if use_uniform_weights else cp.diag
+        multiply = np.multiply if use_uniform_weights else cp.multiply
+        H_o = diag(concatenate([
+                weights,
+                [1. if t_squared_objective else 0.]
+            ]))
+        c_o = concatenate([
+                -multiply( weights, self.y.cpu().numpy() ),
+                [0. if t_squared_objective else 1/2]
+            ])
+        d_o = sum(multiply( weights, self.y.cpu().numpy()**2 ))
+        #
+        # ~~~ Build constraints (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 and -t \leq z_j-y_j \leq t
         H_I = np.concatenate([
                 np.pad( aat_minus_bbt, ((0,0),(0,1),(0,1)) ),   # ~~~ pad the "actual constraints" with zero for the epigraph variable
                 np.zeros(( 2*m, m+1, m+1 ))
@@ -155,11 +206,15 @@ class DualSpline(spline):
                 -self.y.cpu().numpy(),
                 self.y.cpu().numpy()
             ])
+        #
+        # ~~~ Add the constraint t \geq 0, if desired
         if non_negative_epigraph:
             H_I = np.concatenate([ H_I, np.zeros((1,m+1,m+1)) ])
             c_I = np.concatenate([ c_I, np.array(m*[0.] + [-1.]).reshape(1,m+1) ])
             d_I = np.concatenate([ d_I, [0.] ])
-        problem, _, zt = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        #
+        # ~~~ Solve it
+        problem, _, zt = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, constraints=constraints, **kwargs )
         self.z.data = torch.from_numpy(zt[:-1])
         return problem
     #
