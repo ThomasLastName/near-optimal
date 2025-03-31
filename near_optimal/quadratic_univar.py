@@ -147,8 +147,8 @@ class DualSpline(spline):
                 H_I[ k-1+j, -1, -1 ] = -1.
         c_I = np.vstack([
                 np.zeros(( self.k-1, m+1 )),
-                np.hstack([ np.eye(m)/2, -(not t_squared_constraint)*np.ones((m,1)) ])/2,
-                np.hstack([ -np.eye(m)/2, -(not t_squared_constraint)*np.ones((m,1)) ])/2
+                np.hstack([ np.eye(m), -(not t_squared_constraint)*np.ones((m,1)) ])/2,
+                np.hstack([ -np.eye(m), -(not t_squared_constraint)*np.ones((m,1)) ])/2
             ])
         d_I = np.concatenate([
                 breakpoint_reg*np.ones(self.k-1),
