@@ -12,13 +12,14 @@ from near_optimal.quadratic_univar import x_train, y_train, k, m, DualSpline
 v = DualSpline( x_train, y_train )
 
 
+NON_NEGATIVE_EPIGRAPH = ( True, False )
 MSE_PENALTY = np.linspace( 0, 2*m, 31 )
 TOL = ( 1e-6, 1e-8 )
 BREAKPOINT_REG = ( 0, 1e-12, 1e-8, 1e-4 )
 
 differences = []
 with support_for_progress_bars():
-    for ( mse_penalty, tol, breakpoint_reg ) in tqdm( product(MSE_PENALTY,TOL,BREAKPOINT_REG), total=len(MSE_PENALTY)*len(TOL)*len(BREAKPOINT_REG) ):
+    for ( mse_penalty, tol, breakpoint_reg, non_negative_epigraph ) in tqdm( product(MSE_PENALTY,TOL,BREAKPOINT_REG,NON_NEGATIVE_EPIGRAPH), total=len(MSE_PENALTY)*len(TOL)*len(BREAKPOINT_REG)*len(NON_NEGATIVE_EPIGRAPH) ):
         false_false = v.S_Lemma_1( t_squared_objective=False, t_squared_constraint=False, mse_penalty=mse_penalty, eps_abs=tol, eps_rel=tol, eps_infeas=tol/1000, breakpoint_reg=breakpoint_reg, print_info=False ).objective.value
         true_true   = v.S_Lemma_1( t_squared_objective=True,  t_squared_constraint=True,  mse_penalty=mse_penalty, eps_abs=tol, eps_rel=tol, eps_infeas=tol/1000, breakpoint_reg=breakpoint_reg, print_info=False ).objective.value
         differences.append(abs(false_false-true_true))

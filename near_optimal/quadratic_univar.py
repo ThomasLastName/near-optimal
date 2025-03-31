@@ -103,8 +103,8 @@ class DualSpline(spline):
         return problem
     #
     # ~~~ Solve the dual problem of minimize t^a+MSE(y,z)/m subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0 and (z_j-y_j)**2 - t^b \leq 0
-    def S_Lemma_1( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, **kwargs ):
-        if t_squared_constraint and not t_squared_objective: my_warn("Minimizing t subject to |y_j-z_j|^2 \leq t^2 ain't good...")
+    def S_Lemma_1( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, non_negative_epigraph=True, **kwargs ):
+        if t_squared_constraint and not (t_squared_objective or non_negative_epigraph): my_warn("Minimizing t subject to |y_j-z_j|^2 \leq t^2 ain't good...")
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
         H_o = np.diag(np.concatenate([ (mse_penalty/m)*np.ones(m), [1. if t_squared_objective else 0.] ]))
@@ -122,15 +122,17 @@ class DualSpline(spline):
                 breakpoint_reg*np.ones(self.k-1),
                 self.y.cpu().numpy().flatten()**2
             ])
-        problem, lamb, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
-        # self.lamb = torch.from_numpy(lamb[:(self.k-1)]).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        # self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
-        self.z.data = torch.from_numpy(z[:-1])  # ~~~ z = Q(\lambda)^{-1}y 
+        if non_negative_epigraph:
+            H_I = np.concatenate([ H_I, np.zeros((1,m+1,m+1)) ])
+            c_I = np.concatenate([ c_I, np.array(m*[0.] + [-1.]).reshape(1,m+1) ])
+            d_I = np.concatenate([ d_I, [0.] ])
+        problem, _, zt = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        self.z.data = torch.from_numpy(zt[:-1])  # ~~~ z = Q(\lambda)^{-1}y 
         return problem
     #
     # ~~~ Solve the dual problem in epigraph form using Simon's suggestion of a linear (rather than non-convex quadratic) epigraph constraint
-    def S_Lemma_2( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=False, breakpoint_reg=0, **kwargs ):
-        if t_squared_constraint and not t_squared_objective: my_warn("Minimizing t subject to |y_j-z_j| \leq t^2 ain't good...")
+    def S_Lemma_2( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, non_negative_epigraph=True, **kwargs ):
+        if t_squared_constraint and not (t_squared_objective or non_negative_epigraph): my_warn("Minimizing t subject to |y_j-z_j| \leq t^2 ain't good...")
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
         H_o = np.diag(np.concatenate([ (mse_penalty/m)*np.ones(m), [1. if t_squared_objective else 0.] ]))
@@ -153,8 +155,12 @@ class DualSpline(spline):
                 -self.y.cpu().numpy(),
                 self.y.cpu().numpy()
             ])
-        problem, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
-        self.z.data = torch.from_numpy(z[:-1])
+        if non_negative_epigraph:
+            H_I = np.concatenate([ H_I, np.zeros((1,m+1,m+1)) ])
+            c_I = np.concatenate([ c_I, np.array(m*[0.] + [-1.]).reshape(1,m+1) ])
+            d_I = np.concatenate([ d_I, [0.] ])
+        problem, _, zt = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        self.z.data = torch.from_numpy(zt[:-1])
         return problem
     #
     # ~~~ Solve a semi-definite relaxation of the dual problem
@@ -485,7 +491,7 @@ if __name__ == "__main__":
     #
     # ~~~ Solve using the S-lemma
     if N is None:
-        val = v.D_kappa( M=2, kappa=1, quadratic_objective=True, mse_penalty=0 )
+        val = v.S_Lemma_2( non_negative_epigraph=False, eps_abs=1e-6, eps_rel=1e-6, eps_infeas=1e-9 )
         best_z = v.z.data.clone()
     if N is not None:
         best_error = float("inf")
