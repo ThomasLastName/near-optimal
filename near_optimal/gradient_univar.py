@@ -35,6 +35,7 @@ class spline(nn.Module):
         self.c = c
         self.D = D
         self.z = nn.Parameter( torch.randn_like(x) if y is None else torch.clone(y) )
+        self.compute_slopes_and_intercepts()
     #
     # ~~~ Compute the thing that we want to be non-negative
     def compute_violation( self ):
@@ -68,6 +69,17 @@ class spline(nn.Module):
         self.nodes = nodes
         return nodes
     #
+    # ~~~ Using z, compute the slopes and intercepts of each linear piece
+    def compute_slopes_and_intercepts(self):
+        c = torch.zeros_like(self.d)
+        s = torch.zeros_like(self.d)
+        for j in range(self.k):
+            j += 1
+            s[j-1] = (self.z[2*j-1] - self.z[2*j-1-1]) / self.d[j-1]    # ~~~ (z_{2j} - z_{2j-1}) / (x_{2j} - x_{2j-1})
+            c[j-1] = self.z[2*j-1] - s[j-1]*self.x[2*j-1]
+        self.slopes = s
+        self.intercepts = c
+    #
     # ~~~ Compute v(x)
     def forward( self, x ):
         nodes = self.compute_break_points()
@@ -99,7 +111,7 @@ if __name__ == "__main__":
     x_test = torch.linspace(-1,1,1001)
     y_test = f(x_test)
     # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
-    penalty_coefficient = 3.5
+    penalty_coefficient = 0.5
     penalty_fn = lambda x: torch.clamp(1-x,min=0).max()  # ~~~ returns zero if x\geq0, else returns something positive
     lr = 1e-2
     N = 400

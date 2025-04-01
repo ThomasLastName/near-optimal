@@ -97,15 +97,37 @@ class DualSpline(spline):
         self.t = 0  # ~~~ iterations completed thus far of the Frank-Wolfe algorithm
         self.eps = eps
         self.lr = lr
-        self.upper_bound_on_primal = 100000
-        # self.optimizer = torch.optim.Adam( [self.lamb], lr=lr )
+        self.lower_bounds = x_train[ 2*(torch.arange(k-1)+1)-1 ].squeeze()
+        self.upper_bounds = x_train[ 2*(torch.arange(k-1)+1)   ].squeeze()
+        self.project()
+        self.update_upper_bound_on_primal()
+        self.lower_bound_on_primal = 0.
+    #
+    # ~~~ Project onto a constraint set that is equivalent to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0 for all i = 1,...,k-1
+    def project(self):
+        if not torch.allclose( self.z, torch.zeros_like(self.z) ):  # ~~~ prevent a common failure case (but not all possible failure cases)
+            with torch.no_grad():
+                tau = self.compute_break_points()
+                tau.clamp_( min=self.lower_bounds, max=self.upper_bounds )
+                self.compute_slopes_and_intercepts()
+                a = self.slopes[0]
+                b = self.intercepts[0]
+                c = self.slopes.diff()
+                for j in range(self.k):
+                    for i in [1,0]:
+                        j += 1
+                        index_2i_minus_j = 2*j-i - 1
+                        evaluation_site = self.x[index_2i_minus_j]
+                        j -= 1
+                        self.z.data[index_2i_minus_j] = a*evaluation_site + b + sum( c[ell]*(evaluation_site-tau[ell]) for ell in range(j) )
     #
     # ~~~ Save the best upper bound which has been seen seen thus far available
-    def update_upper_bound_on_primal(self):
-        if self.compute_violation().min().item()>=1:
+    def update_upper_bound_on_primal( self, tol=1e-10 ):
+        if self.compute_violation().min().item() > 1 - tol:
             current_upper_bound = (self.z-self.y).abs().max().item()
             if hasattr( self, "upper_bound_on_primal" ):
                 self.upper_bound_on_primal = min( current_upper_bound, self.upper_bound_on_primal )
+                if current_upper_bound == self.upper_bound_on_primal: self.best_z = self.z.data.clone()
             else:
                 self.upper_bound_on_primal = current_upper_bound
     #
@@ -124,8 +146,11 @@ class DualSpline(spline):
         problem, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, constraints=constraints, **kwargs )
         self.z.data = torch.from_numpy(z)
         self.problem = problem  # ~~~ for reference if diagnostics are necessary
+        self.project()
         self.update_upper_bound_on_primal()
-        return np.sqrt(problem.objective.value)
+        dual_max = np.sqrt(problem.objective.value)
+        self.lower_bound_on_primal = max( self.lower_bound_on_primal, dual_max )
+        return dual_max
     #
     # ~~~ Solve the dual problem of minimize t^a+MSE(y,z)/m subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0 and (z_j-y_j)**2 - t^b \leq 0
     def S_Lemma_1( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, non_negative_epigraph=True, weighted_mean=False, **kwargs ):
@@ -179,14 +204,17 @@ class DualSpline(spline):
         problem, _, zt = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, constraints=constraints, **kwargs )
         self.z.data = torch.from_numpy(zt[:-1])  # ~~~ z = Q(\lambda)^{-1}y 
         self.problem = problem  # ~~~ for reference if diagnostics are necessary
+        self.project()
         self.update_upper_bound_on_primal()
-        return deduce_lower_bound_on_ERM(
+        lower_bound = deduce_lower_bound_on_ERM(
                 dual_max = problem.objective.value,
                 mse_penalty = mse_penalty,
                 a = t_squared_objective + 1,
                 b = ( t_squared_constraint + 1) / 2,
                 upper_bound_on_primal = self.upper_bound_on_primal 
             )
+        self.lower_bound_on_primal = max( self.lower_bound_on_primal, lower_bound )
+        return lower_bound
     #
     # ~~~ Solve the dual problem in epigraph form using Simon's suggestion of a linear (rather than non-convex quadratic) epigraph constraint
     def S_Lemma_2( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, non_negative_epigraph=True, weighted_mean=False, **kwargs ):
@@ -245,14 +273,17 @@ class DualSpline(spline):
         problem, _, zt = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, constraints=constraints, **kwargs )
         self.z.data = torch.from_numpy(zt[:-1])
         self.problem = problem  # ~~~ for reference if diagnostics are necessary
+        self.project()
         self.update_upper_bound_on_primal()
-        return deduce_lower_bound_on_ERM(
+        lower_bound = deduce_lower_bound_on_ERM(
                 dual_max = problem.objective.value,
                 mse_penalty = mse_penalty,
                 a = t_squared_objective + 1,
                 b = ( t_squared_constraint + 1),
                 upper_bound_on_primal = self.upper_bound_on_primal 
             )
+        self.lower_bound_on_primal = max( self.lower_bound_on_primal, lower_bound )
+        return lower_bound
     #
     # ~~~ Solve a semi-definite relaxation of the dual problem
     def ell_infty_rank_relaxation( self, *args, **kwargs ):
