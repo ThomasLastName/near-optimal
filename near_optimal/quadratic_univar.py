@@ -153,7 +153,7 @@ class DualSpline(spline):
         return dual_max
     #
     # ~~~ Solve the dual problem of minimize t^a+MSE(y,z)/m subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0 and (z_j-y_j)**2 - t^b \leq 0
-    def S_Lemma_1( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, non_negative_epigraph=True, weighted_mean=False, **kwargs ):
+    def S_Lemma_1( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=False, breakpoint_reg=0, non_negative_epigraph=True, weighted_mean=False, **kwargs ):
         if t_squared_constraint and not (t_squared_objective or non_negative_epigraph): my_warn("Minimizing t subject to |y_j-z_j|^2 \leq t^2 ain't good...")
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
@@ -217,7 +217,7 @@ class DualSpline(spline):
         return lower_bound
     #
     # ~~~ Solve the dual problem in epigraph form using Simon's suggestion of a linear (rather than non-convex quadratic) epigraph constraint
-    def S_Lemma_2( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=True, breakpoint_reg=0, non_negative_epigraph=True, weighted_mean=False, **kwargs ):
+    def S_Lemma_2( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=False, breakpoint_reg=0, non_negative_epigraph=True, weighted_mean=False, **kwargs ):
         if t_squared_constraint and not (t_squared_objective or non_negative_epigraph): my_warn("Minimizing t subject to |y_j-z_j| \leq t^2 ain't good...")
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
