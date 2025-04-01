@@ -116,10 +116,10 @@ class DualSpline(spline):
                 for j in range(self.k):
                     for i in [1,0]:
                         j += 1
-                        index_2i_minus_j = 2*j-i - 1
-                        evaluation_site = self.x[index_2i_minus_j]
+                        index_2j_minus_i = 2*j-i - 1
+                        evaluation_site = self.x[index_2j_minus_i]  # ~~~ x_{2j-i}
                         j -= 1
-                        self.z.data[index_2i_minus_j] = a*evaluation_site + b + sum( c[ell]*(evaluation_site-tau[ell]) for ell in range(j) )
+                        self.z.data[index_2j_minus_i] = a*evaluation_site + b + sum( c[ell]*(evaluation_site-tau[ell]) for ell in range(j) )
     #
     # ~~~ Save the best upper bound which has been seen seen thus far available
     def update_upper_bound_on_primal( self, tol=1e-10 ):
