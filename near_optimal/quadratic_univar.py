@@ -323,9 +323,9 @@ class DualSpline(spline):
         #
         # ~~~ Solve the dual of max norm minimization in epigraph form, possibly also penalizing MSE in the objective function
         if epigraph_constraint == "linear":
-            self.S_Lemma_2( *args, mse_penalty=mse_penalty, quadratic_objective=(epigraph_objective=="quadratic") **kwargs )
+            self.S_Lemma_2( *args, mse_penalty=mse_penalty, t_squared_objective=(epigraph_objective=="quadratic") **kwargs )
         else:
-            self.S_Lemma_1( *args, mse_penalty=mse_penalty, quadratic_objective=(epigraph_objective=="quadratic") **kwargs )
+            self.S_Lemma_1( *args, mse_penalty=mse_penalty, t_squared_objective=(epigraph_objective=="quadratic") **kwargs )
         #
         # ~~~ Diagnostics
         worst_offender = self.compute_violation().min().item()
@@ -358,13 +358,13 @@ class DualSpline(spline):
         self.z.data = torch.from_numpy(z)
     #
     # ~~~ Minimize t+mse_penalty*MSE(y,z) subject to |s_jx + c_j - y| \leq t for both data pairs (x,y), for j=1,...,k, and subject to p_j(s_1,...,s_k,c_1,...,c_k) \leq 0
-    def D_kappa( self, *args, M=0, kappa=0, mse_penalty=0, quadratic_objective=True, announce_eigenvalues=True, **kwargs ):
+    def D_kappa( self, *args, M=0, kappa=0, mse_penalty=0, t_squared_objective=True, announce_eigenvalues=True, **kwargs ):
         #
         # ~~~ Define objects of the correct size
         k = self.k
         m = len(self.y)
-        H_o = np.diag(np.concatenate([ (mse_penalty/m)*np.ones(m), [1. if quadratic_objective else 0.] ])) #np.zeros((m+1,m+1))
-        c_o = np.concatenate([ -(mse_penalty/m)*self.y.cpu().numpy(), [0. if quadratic_objective else 1/2] ]) #np.array( 2*k*[0.] + [1/2] )
+        H_o = np.diag(np.concatenate([ (mse_penalty/m)*np.ones(m), [1. if t_squared_objective else 0.] ])) #np.zeros((m+1,m+1))
+        c_o = np.concatenate([ -(mse_penalty/m)*self.y.cpu().numpy(), [0. if t_squared_objective else 1/2] ]) #np.array( 2*k*[0.] + [1/2] )
         d_o = (mse_penalty/m)*(self.y**2).sum().item() #0
         H_I = np.zeros(( k-1+2*m, 2*k+1, 2*k+1 ))
         c_I = np.zeros(( k-1+2*m, 2*k+1 ))
@@ -379,7 +379,7 @@ class DualSpline(spline):
                 my_warn("A midpoint of the shifted data is approximately zero. Consider toggling the value of M.")
                 break
         #
-        # ~~~ Build the "actual constraints"
+        # ~~~ Build the "actual constraints," i.e., the constraints on the locations of breakpoints
         for j in range(k-1):
             j += 1  # ~~~ use 1-based indexing j=1,...,k-1
             delta_over_2 = (self.x[(2*j)-1] - self.x[(2*j-1)-1]).item()/2           # ~~~ == (x_{2j} - x_{2j-1})/2
@@ -404,8 +404,6 @@ class DualSpline(spline):
             H_I[ j, k+j, k+j+1 ]   = -C
             H_I[ j, k+j+1, k+j ]   = -C
             H_I[ j, k+j+1, k+j+1 ] =  C
-            # penalty_coefficient = kappa/M if divide_by_M else kappa/abs(shifted_midpoint)
-            # H_I[ j, :, : ] += penalty_coefficient*np.eye(2*k+1)
             smallest_eigenvalue, corresponding_eigenvector = eigsh( H_I[j,:,:], k=1, which='SA' )
             H_I[ j, :, : ] += kappa*smallest_eigenvalue*np.eye(2*k+1)
             if announce_eigenvalues: print(f"The Hessian of quadratic constraint {j+1}/{k-1} has smallest eigenvalue {smallest_eigenvalue[0]}.")
@@ -420,19 +418,19 @@ class DualSpline(spline):
                 # ~~~ Add the constraint s_j*(x+M) + c_j - y - t \leq 0
                 evaluation_site = self.x[index_2j_minus_i].item()  # ~~~ == x_{2j-i}
                 training_label  = self.y[index_2j_minus_i].item()  # ~~~ == y_{2j-i}
-                c_I[ k-1+index_2j_minus_i, j   ] = (evaluation_site+M)
-                c_I[ k-1+index_2j_minus_i, k+j ] = 1
-                c_I[ k-1+index_2j_minus_i, -1  ] = -1
+                c_I[ k-1+index_2j_minus_i, j   ] = (evaluation_site+M)/2
+                c_I[ k-1+index_2j_minus_i, k+j ] = 1/2
+                c_I[ k-1+index_2j_minus_i, -1  ] = -1/2
                 d_I[ k-1+index_2j_minus_i ] = -training_label
                 #
                 # ~~~ Add the constraint -s_j*(x+M) - c_j + y - t \leq 0
-                c_I[ k-1+m+index_2j_minus_i, j   ] = -(evaluation_site+M)
-                c_I[ k-1+m+index_2j_minus_i, k+j ] = -1
-                c_I[ k-1+m+index_2j_minus_i, -1  ] = -1
+                c_I[ k-1+m+index_2j_minus_i, j   ] = -(evaluation_site+M)/2
+                c_I[ k-1+m+index_2j_minus_i, k+j ] = -1/2
+                c_I[ k-1+m+index_2j_minus_i, -1  ] = -1/2
                 d_I[ k-1+m+index_2j_minus_i ] = training_label
         #
         # ~~~ Solve the dual
-        problem, _, s_c_t = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I/2, d_I=d_I, *args, **kwargs )
+        problem, _, s_c_t = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         s, c, t = np.array_split( s_c_t, [k,2*k] )
         for j in range(k):
             for i in [1,0]:
@@ -440,14 +438,16 @@ class DualSpline(spline):
                 appropriate_index = (2*j-i)-1
                 j -= 1  # ~~~ return to 0-based indexing
                 with torch.no_grad(): self.z.data[appropriate_index] = s[j]*(self.x[appropriate_index]+M) + c[j]
-        print("")
-        print(f"t: {t}")
-        print(f"objective: {problem.objective.value}")
-        print("")
-        return problem
+        return deduce_lower_bound_on_ERM(
+                dual_max = problem.objective.value,
+                mse_penalty = mse_penalty,
+                a = t_squared_objective + 1,
+                b = 1,
+                upper_bound_on_primal = self.upper_bound_on_primal
+            )
     #
     # ~~~ Minimize t+mse_penalty*MSE(y,z) subject to |s_jx + c_j - y| \leq t for both data pairs (x,y), for j=1,...,k, and subject to p_j(s_1,...,c_k) + \kappa\|s_1,...,s_k\|^2 \leq 0 which is equivalent to (s_1,...,c_k) lying in the eigenspace of p_j's Hessian's smallest eigenvalue, which we enforce as a linear equality constraint
-    def P_kappa_1( self, *args, M=0, mse_penalty=0, quadratic_objective=False, announce_eigenvalues=True, **kwargs ):
+    def P_kappa_1( self, *args, M=0, mse_penalty=0, t_squared_objective=False, announce_eigenvalues=True, **kwargs ):
         #
         # ~~~ Define objects of the correct size
         k = self.k
@@ -455,7 +455,7 @@ class DualSpline(spline):
         c = cp.Variable(k)
         t = cp.Variable()
         alpha = cp.Variable(k-1)
-        epigraph_objective = t**2 if quadratic_objective else t
+        epigraph_objective = t**2 if t_squared_objective else t
         if mse_penalty>0: epigraph_objective = epigraph_objective + mse_penalty*cp.sum_squares( self.y.cpu().numpy() - self.z.detach().cpu().numpy() )
         objective = cp.Minimize( epigraph_objective )
         constraints = [ t>=0 ]
