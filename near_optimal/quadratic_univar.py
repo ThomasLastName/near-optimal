@@ -80,11 +80,11 @@ def build_a_j(x,j):
 
 #
 # ~~~ Solve t^{a/b} + mse_penalty*t**2 == dual_max for t, from minimizing t^a + mse_penalty*MSE (\leq t^a + mse_penalty*|y-z|_{\ell^\infty}**2) subject to |y-z|_{\ell^\infty} \leq t^b
-def deduce_lower_bound_on_ERM( dual_max, mse_penalty, a, b, upper_bound_on_primal ):
+def deduce_lower_bound_on_ERM( dual_max, mse_penalty, a, b, upper_bound_on_primal, safe=True ):
     if dual_max <= 0: return 0.
     f = lambda t: t**(a/b) + mse_penalty*t**2 - dual_max    # ~~~ which we will solve for a lower bound t on |y-z|_{\ell^\infty}
     lower_bound_on_primal = dual_max**(b/a) if mse_penalty==0 else root_scalar( f=f, bracket=[0,upper_bound_on_primal] ).root
-    assert lower_bound_on_primal < upper_bound_on_primal, "The supposed lower bound on the primal min is larger than the supplied upper bound on the primal min (this is mathematically incorrect, implying something is awry)."
+    if safe: assert lower_bound_on_primal < upper_bound_on_primal, "The supposed lower bound on the primal min is larger than the supplied upper bound on the primal min (this is mathematically incorrect, implying something is awry)."
     return lower_bound_on_primal
 
 class DualSpline(spline):
@@ -363,12 +363,30 @@ class DualSpline(spline):
         # ~~~ Define objects of the correct size
         k = self.k
         m = len(self.y)
-        H_o = np.diag(np.concatenate([ (mse_penalty/m)*np.ones(m), [1. if t_squared_objective else 0.] ])) #np.zeros((m+1,m+1))
-        c_o = np.concatenate([ -(mse_penalty/m)*self.y.cpu().numpy(), [0. if t_squared_objective else 1/2] ]) #np.array( 2*k*[0.] + [1/2] )
-        d_o = (mse_penalty/m)*(self.y**2).sum().item() #0
+        H_o = np.diag(np.concatenate([ np.zeros(m), [1. if t_squared_objective else 0.] ])) #np.zeros((m+1,m+1))
+        c_o = np.concatenate([ np.zeros(m), [0. if t_squared_objective else 1/2] ]) #np.array( 2*k*[0.] + [1/2] )
+        d_o = 0
         H_I = np.zeros(( k-1+2*m, 2*k+1, 2*k+1 ))
         c_I = np.zeros(( k-1+2*m, 2*k+1 ))
         d_I = np.zeros( k-1+2*m )
+        #
+        # ~~~ Penalize MSE
+        for j in range(k):
+            for i in [1,0]:
+                j += 1  # ~~~ use 1-based indexing j=1,...,k
+                index_2j_minus_i = (2*j-i)-1
+                j -= 1  # ~~~ return to 0-based indexing
+                #
+                # ~~~ Add (mse_penalty/m)*( s_j*x_{2j-i} + c_j - y_{2j-i} )^2 to the objective function
+                evaluation_site = self.x[index_2j_minus_i].item() + M   # ~~~ == x_{2j-i} + M
+                training_label  = self.y[index_2j_minus_i].item()       # ~~~ == y_{2j-i}
+                H_o[j,j] += (mse_penalty/m) * evaluation_site**2    # ~~~ (mse_penalty/m) * x_{2j-i}^2 * s_j^2
+                H_o[k+j,j] += (mse_penalty/m) * evaluation_site
+                H_o[j,k+j] += (mse_penalty/m) * evaluation_site
+                H_o[k+j,k+j] += mse_penalty/m                       # ~~~ (mse_penalty/m) * c_j^2
+                c_o[j] -= (mse_penalty/m) * training_label * evaluation_site    # ~~~ -2(mse_penalty/m) * x_{2j-i} * y_{2j-i} * s_j
+                c_o[k+j] -= (mse_penalty/m) * training_label                    # ~~~ -2(mse_penalty/m) * y_{2j-i} * c_j
+                d_o += (mse_penalty/m) * training_label**2     # ~~~ y_{2j-i}^2
         #
         # ~~~ Safety feature
         for j in range(k-1):
@@ -437,14 +455,8 @@ class DualSpline(spline):
                 j += 1  # ~~~ use 1-based indexing j=1,...,k
                 appropriate_index = (2*j-i)-1
                 j -= 1  # ~~~ return to 0-based indexing
-                with torch.no_grad(): self.z.data[appropriate_index] = s[j]*(self.x[appropriate_index]+M) + c[j]
-        return deduce_lower_bound_on_ERM(
-                dual_max = problem.objective.value,
-                mse_penalty = mse_penalty,
-                a = t_squared_objective + 1,
-                b = 1,
-                upper_bound_on_primal = self.upper_bound_on_primal
-            )
+                with torch.no_grad(): self.z.data[appropriate_index] = s[j]*self.x[appropriate_index] + c[j]
+        return np.sqrt(abs(problem.objective.value)) if t_squared_objective else problem.objective.value
     #
     # ~~~ Minimize t+mse_penalty*MSE(y,z) subject to |s_jx + c_j - y| \leq t for both data pairs (x,y), for j=1,...,k, and subject to p_j(s_1,...,c_k) + \kappa\|s_1,...,s_k\|^2 \leq 0 which is equivalent to (s_1,...,c_k) lying in the eigenspace of p_j's Hessian's smallest eigenvalue, which we enforce as a linear equality constraint
     def P_kappa_1( self, *args, M=0, mse_penalty=0, t_squared_objective=False, announce_eigenvalues=True, **kwargs ):
@@ -456,9 +468,7 @@ class DualSpline(spline):
         t = cp.Variable()
         alpha = cp.Variable(k-1)
         epigraph_objective = t**2 if t_squared_objective else t
-        if mse_penalty>0: epigraph_objective = epigraph_objective + mse_penalty*cp.sum_squares( self.y.cpu().numpy() - self.z.detach().cpu().numpy() )
-        objective = cp.Minimize( epigraph_objective )
-        constraints = [ t>=0 ]
+        constraints = []
         #
         # ~~~ Safety feature
         for j in range(k-1):
@@ -502,14 +512,19 @@ class DualSpline(spline):
                 j -= 1  # ~~~ return to 0-based indexing
                 evaluation_site = self.x[index_2j_minus_i].item()  # ~~~ == x_{2j-i}
                 training_label  = self.y[index_2j_minus_i].item()  # ~~~ == y_{2j-i}
+                error = s[j]*(evaluation_site+M) + c[j] - training_label
                 #
                 # ~~~ Add the constraint s_j*(x+M) + c_j - y - t \leq 0
-                constraints.append( s[j]*(evaluation_site+M) + c[j] - training_label - t <= 0 )
+                constraints.append( error - t <= 0 )
                 #
                 # ~~~ Add the constraint -s_j*(x+M) - c_j + y - t \leq 0                
-                constraints.append( -s[j]*(evaluation_site+M) - c[j] + training_label - t <= 0 )
+                constraints.append( -error - t <= 0 )
+                #
+                # ~~~ If penalizing the MSE, add this error squared to the objective
+                if mse_penalty>0: epigraph_objective += (mse_penalty/m)*error**2
         #
         # ~~~ Solve it
+        objective = cp.Minimize( epigraph_objective )
         problem = cp.Problem( objective, constraints )
         problem.solve( *args, **kwargs )
         return problem
@@ -577,7 +592,7 @@ class DualSpline(spline):
 # ~~~ Config
 torch.manual_seed(2025)
 torch.set_default_dtype(torch.double)
-k = 15
+k = 3
 m =  2*k
 f = lambda x: torch.sin(2*torch.pi*x)
 noise_level = 0.1
