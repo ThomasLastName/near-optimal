@@ -20,7 +20,7 @@ BREAKPOINT_REG = ( 0, 1e-12, 1e-8, 1e-4 )
 
 differences = []
 with support_for_progress_bars():
-    for ( mse_penalty, tol, breakpoint_reg, non_negative_epigraph, weighted_mean ) in tqdm( product( MSE_PENALTY, TOL, BREAKPOINT_REG, NON_NEGATIVE_EPIGRAPH, WEIGHTED_MEAN ), total=len(MSE_PENALTY)*len(TOL)*len(BREAKPOINT_REG)*len(NON_NEGATIVE_EPIGRAPH) ):
+    for ( mse_penalty, tol, breakpoint_reg, non_negative_epigraph, weighted_mean ) in tqdm( product( MSE_PENALTY, TOL, BREAKPOINT_REG, NON_NEGATIVE_EPIGRAPH, WEIGHTED_MEAN ), total=len(MSE_PENALTY)*len(TOL)*len(BREAKPOINT_REG)*len(NON_NEGATIVE_EPIGRAPH)*len(WEIGHTED_MEAN) ):
         if not (weighted_mean and mse_penalty==0):
             false_false = v.S_Lemma_1( t_squared_objective=False, t_squared_constraint=False, mse_penalty=mse_penalty, eps_abs=tol, eps_rel=tol, eps_infeas=tol/1000, breakpoint_reg=breakpoint_reg, weighted_mean=weighted_mean, print_info=False )
             true_true   = v.S_Lemma_1( t_squared_objective=True,  t_squared_constraint=True,  mse_penalty=mse_penalty, eps_abs=tol, eps_rel=tol, eps_infeas=tol/1000, breakpoint_reg=breakpoint_reg, weighted_mean=weighted_mean, print_info=False )
