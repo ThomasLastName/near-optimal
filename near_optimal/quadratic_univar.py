@@ -81,10 +81,11 @@ def build_a_j(x,j):
 #
 # ~~~ Solve t^{a/b} + mse_penalty*t**2 == dual_max for t, from minimizing t^a + mse_penalty*MSE (\leq t^a + mse_penalty*|y-z|_{\ell^\infty}**2) subject to |y-z|_{\ell^\infty} \leq t^b
 def deduce_lower_bound_on_ERM( dual_max, mse_penalty, a, b, upper_bound_on_primal ):
-    assert dual_max < upper_bound_on_primal, "The supposed dual max is larger than the supplied upper bound on the primal min (this is mathematically incorrect)."
     if dual_max <= 0: return 0.
     f = lambda t: t**(a/b) + mse_penalty*t**2 - dual_max    # ~~~ which we will solve for a lower bound t on |y-z|_{\ell^\infty}
-    return dual_max**(b/a) if mse_penalty==0 else root_scalar( f=f, bracket=[0,upper_bound_on_primal] ).root
+    lower_bound_on_primal = dual_max**(b/a) if mse_penalty==0 else root_scalar( f=f, bracket=[0,upper_bound_on_primal] ).root
+    assert lower_bound_on_primal < upper_bound_on_primal, "The supposed lower bound on the primal min is larger than the supplied upper bound on the primal min (this is mathematically incorrect, implying something is awry)."
+    return lower_bound_on_primal
 
 class DualSpline(spline):
     def __init__( self, x, y, eps=1e-6, lr=1e-2 ):
