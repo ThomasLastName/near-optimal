@@ -592,7 +592,7 @@ class DualSpline(spline):
 # ~~~ Config
 torch.manual_seed(2025)
 torch.set_default_dtype(torch.double)
-k = 3
+k = 10
 m =  2*k
 f = lambda x: torch.sin(2*torch.pi*x)
 noise_level = 0.1
@@ -628,7 +628,7 @@ if __name__ == "__main__":
     #
     # ~~~ Solve using the S-lemma
     if N is None:
-        val = v.S_Lemma_2( non_negative_epigraph=False, eps_abs=1e-6, eps_rel=1e-6, eps_infeas=1e-9 )
+        val = v.solve_dual_of_mse_minimization()
         best_z = v.z.data.clone()
     if N is not None:
         best_error = float("inf")
