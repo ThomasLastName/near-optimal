@@ -592,7 +592,7 @@ class DualSpline(spline):
 # ~~~ Config
 torch.manual_seed(2025)
 torch.set_default_dtype(torch.double)
-k = 10
+k = 15
 m =  2*k
 f = lambda x: torch.sin(2*torch.pi*x)
 noise_level = 0.1
@@ -628,7 +628,7 @@ if __name__ == "__main__":
     #
     # ~~~ Solve using the S-lemma
     if N is None:
-        val = v.solve_dual_of_mse_minimization()
+        val = v.solve_dual_of_mse_minimization( solver="SCS", eps=1e-6 )
         best_z = v.z.data.clone()
     if N is not None:
         best_error = float("inf")
@@ -662,41 +662,40 @@ if __name__ == "__main__":
     for j in range(k):
         my_s[j] = (v.z[2*(j+1)-2] - v.z[2*(j+1)-1]) / (x_train[2*(j+1)-2] - x_train[2*(j+1)-1])
         my_c[j] = v.z[2*(j+1)-1] - my_s[j]*x_train[2*(j+1)-1]
-
-if False:
-    #
-    # ~~~ Try taking that as the initialization for a ReLU network
-    v = CarefulNet(x_train)
-    with torch.no_grad():
-        slopes = (best_z[1::2] - best_z[::2]) / (x_train[1::2] - x_train[::2])
-        v.relu_net[0].bias.data = -nodes.reshape(v.relu_net[0].bias.data.shape)
-        v.a.data = slopes[0]
-        v.relu_net[-1].weight.data = slopes.diff().reshape(v.relu_net[-1].weight.data.shape)
-        v.relu_net[-1].bias.fill_( best_z[0] - slopes[0]*x_train[0] )
-    fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), show=False, title="MSE Minimization Subject to Constraints on the Location of Breakpoints" )
-    with torch.no_grad():
-        ax.scatter( nodes, v(nodes.reshape(-1,1)), color="blue", alpha=0.4 )
-    plt.show()
-    #
-    # ~~~ Train it
-    optimizer = torch.optim.Adam( v.parameters(), lr=1e-2 )
-    x_train_vertical = x_train.reshape(-1,1)
-    gif = GifMaker()
-    fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", show=False )  
-    gif.capture()
-    with support_for_progress_bars():
-        for _ in trange(10000):
-            predictinons = v(x_train_vertical)
-            max_error = (y_train-predictinons).abs().max()
-            max_error.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            v.project()
-            if (_+1)%100:
-                fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", show=False, fig=fig, ax=ax )
-                gif.capture()
-        points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", fig=fig, ax=ax )
-        gif.develop()
+    # #
+    # # ~~~ Try taking that as the initialization for a ReLU network
+    # from near_optimal.PGD_univar import RigorousNet
+    # v = RigorousNet(x_train)
+    # with torch.no_grad():
+    #     slopes = (best_z[1::2] - best_z[::2]) / (x_train[1::2] - x_train[::2])
+    #     v.relu_net[0].bias.data = -nodes.reshape(v.relu_net[0].bias.data.shape)
+    #     v.a.data = slopes[0]
+    #     v.relu_net[-1].weight.data = slopes.diff().reshape(v.relu_net[-1].weight.data.shape)
+    #     v.relu_net[-1].bias.fill_( best_z[0] - slopes[0]*x_train[0] )
+    # fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), show=False, title="MSE Minimization Subject to Constraints on the Location of Breakpoints" )
+    # with torch.no_grad():
+    #     ax.scatter( nodes, v(nodes.reshape(-1,1)), color="blue", alpha=0.4 )
+    # plt.show()
+    # #
+    # # ~~~ Train it
+    # optimizer = torch.optim.Adam( v.parameters(), lr=1e-2 )
+    # x_train_vertical = x_train.reshape(-1,1)
+    # gif = GifMaker()
+    # fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", show=False )  
+    # gif.capture()
+    # with support_for_progress_bars():
+    #     for _ in trange(10000):
+    #         predictinons = v(x_train_vertical)
+    #         max_error = (y_train-predictinons).abs().max()
+    #         max_error.backward()
+    #         optimizer.step()
+    #         optimizer.zero_grad()
+    #         v.project()
+    #         if (_+1)%100:
+    #             fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", show=False, fig=fig, ax=ax )
+    #             gif.capture()
+    #     points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", fig=fig, ax=ax )
+    #     gif.develop()
     #
     # ~~~ Train a neural net for comparison
     model = nn.Sequential(
@@ -740,10 +739,11 @@ if False:
     fig, ax = points_with_curves(
             x = x_train,
             y = y_train,
-            curves = ( big_model, ocassional_model, model, v, f ),
-            curve_labels = ( "Large Network Trained with ADAM", "Large Network Trained with ADAM and Early Stopping", "Same Small Network Trained with ADAM", "Small Network Trained with Our Method", "Ground Truth" ),
-            curve_colors = ( "black", "grey", "red", "blue", "green"),
-            curve_marks  = [ "-", "-", "-", "-", "--" ],
+            curves = ( big_model, ocassional_model, v, f ),
+            curve_labels = ( "Large Network Trained with ADAM", "Large Network Trained with ADAM and Early Stopping", "Small Network Trained with Our Method", "Ideal Fit" ),
+            curve_colors = ( "black", "grey", "blue", "green"),
+            curve_marks  = [ "-", "-", "-", "--" ],
+            ylim = [-1.1,1.1],
             show = False,
             title = "Comparison of Our Model with ADAM and Larger Neural Networks",
             model_fit = False
@@ -758,7 +758,7 @@ if False:
         by_label[label] = (handle, line_style)  # Store handle and line style
     legend_handles = [by_label[label][0] for label in by_label]
     legend_labels = [f"{label}" for label in by_label]  # Include line style in label
-    plt.legend( legend_handles, legend_labels, fontsize=17 )
+    plt.legend( legend_handles, legend_labels, fontsize=8.2, )
     plt.show()
     print(v.compute_violation())
 
