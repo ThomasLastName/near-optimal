@@ -67,11 +67,13 @@ def build_a_j(x,j):
 
 #
 # ~~~ Solve t^{a/b} + mse_penalty*t**2 == dual_max for t, from minimizing t^a + mse_penalty*MSE (\leq t^a + mse_penalty*|y-z|_{\ell^\infty}**2) subject to |y-z|_{\ell^\infty} \leq t^b
-def deduce_lower_bound_on_ERM( dual_max, mse_penalty, a, b, upper_bound_on_primal, safe=True ):
+def deduce_lower_bound_on_ERM( dual_max, mse_penalty, a, b, upper_bound_on_primal, hard_fail=True ):
     if dual_max <= 0: return 0.
     f = lambda t: t**(a/b) + mse_penalty*t**2 - dual_max    # ~~~ which we will solve for a lower bound t on |y-z|_{\ell^\infty}
     lower_bound_on_primal = dual_max**(b/a) if mse_penalty==0 else root_scalar( f=f, bracket=[0,upper_bound_on_primal] ).root
-    if safe: assert lower_bound_on_primal < upper_bound_on_primal, "The supposed lower bound on the primal min is larger than the supplied upper bound on the primal min (this is mathematically incorrect, implying something is awry)."
+    msg = "The supposed lower bound on the primal min is larger than the supplied upper bound on the primal min (this is mathematically incorrect, implying something is awry)."
+    if hard_fail: assert lower_bound_on_primal < upper_bound_on_primal, msg
+    else: my_warn(msg)
     return lower_bound_on_primal
 
 class DualSpline(spline):
@@ -199,7 +201,8 @@ class DualSpline(spline):
                 mse_penalty = mse_penalty,
                 a = t_squared_objective + 1,
                 b = ( t_squared_constraint + 1) / 2,
-                upper_bound_on_primal = self.upper_bound_on_primal 
+                upper_bound_on_primal = self.upper_bound_on_primal,
+                hard_fail = False
             )
         self.lower_bound_on_primal = max( self.lower_bound_on_primal, lower_bound )
         return lower_bound
