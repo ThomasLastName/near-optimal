@@ -19,10 +19,14 @@ v = DualSpline( x_train, y_train )
 
 #
 # ~~~ 
-MSE_PENALTY = np.linspace( 0, m, 91 )
+MSE_PENALTY = np.linspace( 0, 8, 25 )
 TOL = ( 1e-6, 1e-9 )
 BREAKPOINT_REG = ( 0, 1e-12, 1e-8 )
 T_SQUARED_OBJECTIVE = ( True, False )
+
+def are_equal(a,b):
+    try: return abs(a-b)<1e-13
+    except: return a==b
 
 try:
     data_1 = pd.read_csv("comparison_data_1.csv").to_dict(orient="records")
@@ -46,12 +50,13 @@ with support_for_progress_bars():
             print("An hour is up!")
             break
         else:
-            target_values = { "mse_penalty":mse_penalty, "tol":tol, "breakpoint_reg":breakpoint_reg, "t_squared_objective":t_squared_objective }
+            settings = { "mse_penalty":mse_penalty, "tol":tol, "breakpoint_reg":breakpoint_reg, "t_squared_objective":t_squared_objective }
             already_computed_it = any(
-                    all(d[key] == value for key, value in target_values.items()) 
+                    all( are_equal(d[key],value) for key, value in settings.items()) 
                     for d in data_1 + data_2  # Assuming you want to check in both lists
                 )
             if not already_computed_it:
+                # print(settings)
                 for data, function in zip( [data_1,data_2], [v.S_Lemma_1,v.S_Lemma_2] ):
                     lower_bound = function( mse_penalty=mse_penalty, solver=cvx.SCS, eps_abs=tol, eps_rel=tol, eps_infeas=tol/1000, breakpoint_reg=breakpoint_reg, t_squared_objective=t_squared_objective, t_squared_constraint=False, weighted_mean=(mse_penalty>0), print_info=False )
                     _           = function( mse_penalty=mse_penalty, solver=cvx.SCS, eps_abs=tol, eps_rel=tol, eps_infeas=tol/1000, breakpoint_reg=breakpoint_reg, t_squared_objective=t_squared_objective, t_squared_constraint=False, weighted_mean=False,           print_info=False )
@@ -71,28 +76,37 @@ data_1.to_csv("comparison_data_1.csv", index=False )
 data_2.to_csv("comparison_data_2.csv", index=False )
 
 
+method = "S_Lemma_1"
 for data in (data_1,data_2):
-    # Convert `t_squared_objective` to a string for easier grouping
+    #
+    # ~~~ Convert `t_squared_objective` to a string for easier grouping
     data["t_squared_objective"] = data["t_squared_objective"].astype(str)
-    # Define colors for each unique (breakpoint_reg, t_squared_objective) combination
+    #
+    # ~~~ Define colors for each unique (breakpoint_reg, t_squared_objective) combination
     unique_combinations = data[["breakpoint_reg", "t_squared_objective"]].drop_duplicates()
     palette = sns.color_palette("tab10", len(unique_combinations))
     color_map = {tuple(row): palette[i] for i, row in enumerate(unique_combinations.itertuples(index=False, name=None))}
-    # Define line styles for different `tol` values
+    #
+    # ~~~ Define line styles for different `tol` values
     linestyle_map = {1e-9: "-", 1e-6: "--"}
     plt.figure(figsize=(10, 6))
-    # Plot each group separately
+    #
+    # ~~~ Plot each group separately
     for (breakpoint_reg, t_squared_objective, tol), group in data.groupby(["breakpoint_reg", "t_squared_objective", "tol"]):
         color = color_map[(breakpoint_reg, t_squared_objective)]
         linestyle = linestyle_map[group["tol"].iloc[0]]
-        # Plot lower bound
+        #
+        # ~~~ Plot lower bound
         plt.plot(group["mse_penalty"], group["lower_bound"], color=color, linestyle=linestyle, label=f"({breakpoint_reg}, {t_squared_objective}, tol={group['tol'].iloc[0]})")
-        # Plot upper bound using the same color
+        #
+        # ~~~ Plot upper bound using the same color
         plt.plot(group["mse_penalty"], group["upper_bound"], color=color, linestyle=linestyle)
     plt.xlabel("MSE Penalty")
     plt.ylabel("Bound Values")
-    plt.title("Lower and Upper Bounds vs. MSE Penalty")
+    plt.title(f"Lower and Upper Bounds vs. MSE Penalty ({method})")
     plt.legend(title="(breakpoint_reg, t_squared_objective, tol)")
     plt.ylim(0, 0.1)  # Set y-axis limits
     plt.grid(True)
     plt.show()
+    method = "S_Lemma_2"
+
