@@ -1,4 +1,3 @@
-
 import torch
 from torch import nn
 from near_optimal.gradient_univar import spline
@@ -12,12 +11,9 @@ from quality_of_life.my_plt_utils import points_with_curves, GifMaker
 from quality_of_life.my_base_utils import support_for_progress_bars, my_warn
 from quality_of_life.my_cvx_utils import solve_dual_of_QCQP, solve_rank_relaxation_of_QCQP
 
-
-
 ### ~~~
 ## ~~~ Compute the vectors a_j and b_j for which we demand the constraint |a_j^Tz| \leq |b_j^Tz|
 ### ~~~
-
 def build_b_j(x,j):
     #
     # ~~~ Use 1-indexing, assuming that the given j is in zero-indexing to begin with
@@ -29,15 +25,12 @@ def build_b_j(x,j):
     x_2jp1 = x[2*j+1-1]
     x_2j   = x[2*j-1]
     x_2jm1 = x[2*j-1-1]
-    D_j   =  (x_2jp1 - x_2j)    # ~~~ D_j = x_{2j+1} - x_{2j}, the length of the interval on which a break point is allowed
-    d_j   =  (x_2j   - x_2jm1)  # ~~~ d_j = x_{2j} - x_{2j-1}, the length of one of the intervals in which no break point is allowed
-    d_jp1 =  (x_2jp2 - x_2jp1)  # ~~~ d_{j+1} = x_{2j+2} - x_{2j+1}, the length of one of the intervals in which no break point is allowed
     #
     # ~~~ Compute the non-zero coordinates of the vector b_j
-    b_2jp2 = (D_j/2) / d_jp1
-    b_2jp1 = (D_j/2) * (-1) / (d_jp1)
-    b_2j   = (D_j/2) * (-1) / (d_j)
-    b_2jm1 = (D_j/2) / d_j
+    b_2jp2 =  (x_2jp1 - x_2j) / (x_2jp2 - x_2jp1)
+    b_2jp1 = -(x_2jp1 - x_2j) / (x_2jp2 - x_2jp1)
+    b_2j   = -(x_2jp1 - x_2j) / (x_2j - x_2jm1)
+    b_2jm1 =  (x_2jp1 - x_2j) / (x_2j - x_2jm1)
     #
     # ~~~ Assign the computed coefficients to the non-zero positions in the vector b_j
     b_j = torch.zeros_like(x)
@@ -46,7 +39,6 @@ def build_b_j(x,j):
     b_j[2*j-1]   = b_2j     # ~~~ b^{(j)}_{2j}
     b_j[2*j-1-1] = b_2jm1   # ~~~ b^{(j)}_{2j-1}
     return b_j
-
 def build_a_j(x,j):
     #
     # ~~~ Use 1-indexing, assuming that the given j is in zero-indexing to begin with
@@ -58,17 +50,12 @@ def build_a_j(x,j):
     x_2jp1 =  x[2*j+1-1]    # ~~~ x_{2*j+1}
     x_2j   =  x[2*j-1]      # ~~~ x_{2*j}
     x_2jm1 =  x[2*j-1-1]    # ~~~ x_{2*j-1}
-    c_j    =  (x_2j   + x_2jp1)/2   # ~~~ c_j = (x_{2j} + x_{2j+1})/2, the midpoint of the interval where a break point is allowed
-    d_j    =  (x_2j   - x_2jm1)     # ~~~ d_j = x_{2j} - x_{2j-1}, the length of one of the intervals in which no break point is allowed
-    d_jp1  =  (x_2jp2 - x_2jp1)     # ~~~ d_{j+1} = x_{2j+2} - x_{2j+1}, the length of one of the intervals in which no break point is allowed
-    m_j    =  (x_2j   + x_2jm1)/2   # ~~~ m_j = (x_{2j} + x_{2j-1})/2, the midpoint of one of the intervals in which no break point is allowed
-    m_jp1  =  (x_2jp2 + x_2jp1)/2   # ~~~ m_{j+1} = (x_{2j+2} + x_{2j+1})/2, the midpoint of one of the intervals in which no break point is allowed
     #
     # ~~~ Compute the non-zero coordinates of the vector a_j
-    a_2jp2 =  m_jp1/d_jp1 - 1/2 - c_j/d_jp1
-    a_2jp1 = -m_jp1/d_jp1 - 1/2 + c_j/d_jp1
-    a_2j   = -m_j  /d_j   + 1/2 + c_j/d_j
-    a_2jm1 =  m_j  /d_j   + 1/2 - c_j/d_j
+    a_2jp2 =  (x_2jp1 - x_2j) / (x_2jp2 - x_2jp1)
+    a_2jp1 = -(x_2jp1 - x_2j) / (x_2jp2 - x_2jp1) - 2
+    a_2j   =  (x_2jp1 - x_2j) / (x_2j - x_2jm1) + 2
+    a_2jm1 = -(x_2jp1 - x_2j) / (x_2j - x_2jm1)
     #
     # ~~~ Assign the computed coefficients to the non-zero positions in the vector a_j
     a_j = torch.zeros_like(x)
