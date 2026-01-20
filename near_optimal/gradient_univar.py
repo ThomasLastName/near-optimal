@@ -9,6 +9,8 @@ from quality_of_life.my_base_utils import support_for_progress_bars
 class spline(nn.Module):
     def __init__( self, x, y=None ):
         super().__init__()
+        if not isinstance( x, torch.Tensor ):                   x = torch.tensor(x)
+        if y is not None and not isinstance( y, torch.Tensor ): y = torch.tensor(y)
         x = x.squeeze()
         assert x.dim()==1
         x = x.sort().values
