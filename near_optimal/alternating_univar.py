@@ -122,7 +122,6 @@ if __name__=="__main__":
     #
     # ~~~ Train
     N = 100
-    N *= 2
     how_often = 1
     history = []
     fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), title=r"$\ell^\infty$ Error Minimization with Hard Constraints", show=False )
@@ -131,7 +130,7 @@ if __name__=="__main__":
     with support_for_progress_bars():
         pbar = tqdm( desc="Using Gradient Descent", total=N, ascii=' >=' )
         for i in range(N):
-            max_error = v.improve_coefficients( solver=cvx.SCIPY ) if i%2==0 else v.improve_breakpoints( solver=cvx.SCIPY )
+            max_error = v.improve_coefficients( solver=cvx.SCIPY, scipy_options={"method": "highs"} ) if i%2==0 else v.improve_breakpoints( solver=cvx.SCIPY, scipy_options={"method": "highs"} )
             max_error = max_error.objective.value
             _ = pbar.update()
             history.append(max_error)
