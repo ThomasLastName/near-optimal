@@ -79,8 +79,7 @@ def deduce_lower_bound_on_ERM( dual_max, mse_penalty, a, b, upper_bound_on_prima
 class DualSpline(spline):
     def __init__( self, x, y, eps=1e-6, lr=1e-2 ):
         super().__init__(x,y)
-        x, y = self.x, self.z
-        self.y = y
+        x, self.y = self.x, self.z.detach().clone()
         self.lamb = torch.randn(self.k-1).to( device=x.device, dtype=x.dtype )**2
         self.a = torch.stack( [ build_a_j(x,j) for j in range(self.k-1) ] )
         self.b = torch.stack( [ build_b_j(x,j) for j in range(self.k-1) ] )
