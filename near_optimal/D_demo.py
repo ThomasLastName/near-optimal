@@ -54,9 +54,12 @@ y_train = f(x_train) + noise_level*torch.randn_like(x_train)
 x_test = torch.linspace(-1,1,1001)
 y_test = f(x_test)
 v = DualSpline( x_train, y_train )
-M_max = 301
-M_n = 101
+M_max = 3
+M_n = 4
 
 D_kappa_0_curve = []
 D_kappa_1_curve = []
-for M in torch.linspace( 0, M_max, M_n )
+for M in torch.linspace( 0, M_max, M_n ):
+    for kappa in (0,1):
+        for mse_penalty in (0,1):
+            print( v.D_kappa( M=M, kappa=kappa, mse_penalty=mse_penalty ) )
