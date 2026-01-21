@@ -36,10 +36,10 @@ class spline(nn.Module):
         self.d = d
         self.c = c
         self.D = D
-        self.z = nn.Parameter( torch.randn_like(x) if y is None else torch.clone(y) )
+        self.z = nn.Parameter( torch.randn_like(x) if y is None else torch.clone(y) )   # ~~~ note: I think of self.z as being self(self.x), but mathematically, that's only true when the constraint is satisfied
         self.compute_slopes_and_intercepts()
     #
-    # ~~~ Compute the thing that we want to be non-negative
+    # ~~~ Compute the thing that we want to be \geq 1
     def compute_violation( self ):
         a = torch.zeros_like(self.d)
         s = torch.zeros_like(self.d)
@@ -47,11 +47,9 @@ class spline(nn.Module):
             j += 1
             a[j-1] = (self.z[2*j-1] + self.z[2*j-1-1]) / 2              # ~~~ (z_{2j} + z_{2j-1}) / 2
             s[j-1] = (self.z[2*j-1] - self.z[2*j-1-1]) / self.d[j-1]    # ~~~ (z_{2j} - z_{2j-1}) / (x_{2j} - x_{2j-1})
-        # for j in range(self.k-1):
-        #     foo[j] = s[j+1]*self.m[j+1] - s[j]*self.m[j] - (a[j+1] - a[j]) - second_derivative[j]*self.c[j] # ~~~ "x" + (s_{j+1}-x_j)*c_j
-        second_derivative = s.diff()    # ~~~ j-th component is (s[j+1] - s[j])
-        violator = (s*self.m).diff() - a.diff() - second_derivative*self.c
-        return self.D/2 * second_derivative.abs() / violator.abs()
+        second_deriv = s.diff()                                         # ~~~ j-th component is (s[j+1] - s[j])
+        violator = (s*self.m).diff() - a.diff() - second_deriv*self.c   # ~~~ constraint is that this should have absolute value at most self.D/2*second_deriv.abs()
+        return self.D/2 * second_deriv.abs() / violator.abs()
     #
     # ~~~ Compute the points at which the neighboring lines intersect
     def compute_break_points( self ):
