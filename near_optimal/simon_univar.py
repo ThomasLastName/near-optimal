@@ -1,8 +1,6 @@
 
 import torch
-from torch import nn
 from near_optimal.gradient_univar import spline
-import cvxpy as cp
 import numpy as np
 from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
@@ -33,7 +31,7 @@ def build_c_j( x_train, j, x_new ):
     c_2j   =  1/2 + x_new/d_j - m_j/d_j
     c_2jm1 =  1/2 + m_j/d_j - x_new/d_j
     #
-    # ~~~ Assign the computed coefficients to the non-zero positions in the vector a_j
+    # ~~~ Assign the computed coefficients to the non-zero positions in the vector c_j
     c_j = torch.zeros_like(x)
     c_j[2*j-1]   = c_2j
     c_j[2*j-1-1] = c_2jm1
@@ -58,9 +56,6 @@ def build_simons_a_j_and_b_j(x,j):
     b_j    =  build_c_j( x, j+1, x_2j ) - e_2j    # ~~~ v_{j+1}(x_{2j}) - z_{2j} = b^T@z
     return a_j, b_j
 
-# for j in range(k-1):
-#     a_j, b_j = build_simons_a_j_and_b_j(x_train,j)
-#     assert torch.inner(z,a_j) * torch.inner(z,b_j) > 0
 
 class semidefinite_spline(spline):
     def __init__( self, x, y, eps=1e-5, delta=1e-5 ):
@@ -68,6 +63,7 @@ class semidefinite_spline(spline):
         a = []
         b = []
         abt = []
+        k = len(x)//2
         for j in range(k-1):
             a_j, b_j = build_simons_a_j_and_b_j(x,j)
             a.append(a_j)
@@ -83,87 +79,68 @@ class semidefinite_spline(spline):
     def S_Lemma( self, *args, **kwargs ):
         abt = self.abt.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
-        H_o = np.eye(m)
-        c_o = -self.y.cpu().numpy()
-        d_o = (self.y**2).sum().item()
-        _, gamma, lamb = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=-abt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[0.], *args, **kwargs )
-        self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.abt).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
-        self.z.data = torch.linalg.solve( self.Q, self.y )            # ~~~ z = Q(\lambda)^{-1}y 
-        print(f"The dual max is {gamma}")
+        H_o = np.eye(m)/m
+        c_o = -self.y.cpu().numpy()/m
+        d_o = (self.y**2).sum().item()/m
+        _, Lagrange_multiplers, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=-abt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[0.], *args, **kwargs )
+        self.z.data = torch.from_numpy(z)
     #
     # ~~~ Solve (in epigraph form) the dual of the quadratic feasibility problem of the feasibility problem ||z-y||_2^2/m\leq\noise and |a[i].T@z|\leq|b[i].T^@z| for all i
-    def noisy_S_Lemma( self, noise=0.1, *args, **kwargs  ):
+    def noisy_S_Lemma( self, noise=0.1, reg=1, *args, **kwargs  ):
         #
         # ~~~ Set the objective function to be identically zero
         m = len(self.y)
-        H_o = np.eye(m)
-        c_o = np.zeros(m)
-        d_o = 0
+        H_o = np.eye(m)/m   # ~~~ since this is a feasibility program, it doesn't matter what we minimize; so we might as well minimize a strongly convex function which we hope will be small, anyway: the mean squared error
+        c_o = -self.y.cpu().numpy()/m
+        d_o = (self.y.cpu()**2).mean().numpy()
         #
         # ~~~ Set the inequality constraints
-        abt = self.abt.cpu().numpy()                                # ~~~ shape (self.k-1, m, m)
-        H_I = np.concatenate([ -abt, np.eye(m)[np.newaxis,:]/m ])   # ~~~ shape ( self.k,  m, m)
-        c_I = (self.k-1)*[np.zeros(m)] + [-self.y.cpu().numpy()/m]
-        d_I = (self.k-1)*[0.] + [ (self.y.cpu()**2).mean().numpy() - noise ]
+        abt = self.abt.cpu().numpy()                                # ~~~ shape ( self.k-1, m, m )
+        H_I = np.concatenate([ -abt, np.eye(m)[np.newaxis,:] ])   # ~~~ shape ( self.k, m, m )
+        c_I = (self.k-1)*[np.zeros(m)] + [-self.y.cpu().numpy()]  # ~~~ shape ( self.k, m )
+        d_I = (self.k-1)*[0.] + [ (self.y.cpu()**2).sum().numpy() - m*noise ]  # ( self.k, )
         #
         # ~~~ Solve the dual
-        _, gamma, lamb = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
-        #
-        # ~~~ Process the results
-        self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        self.Q = torch.from_numpy( (lamb.reshape(-1,1,1)*H_I).sum(axis=0) ).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        self.z.data = torch.linalg.solve( self.Q, self.y*lamb[-1]/m )
-        print(f"The dual max is {gamma}")
+        _, Lagrange_multiplers, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        self.z.data = torch.from_numpy(z)
     #
-    # ~~~ Compute a different semidefinite realxation
-    def Grothendieck_relaxation( self, *args, nuclear_penalty=0., **kwargs ):
-        abt = self.abt.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
-        Z = cp.Variable( (2*self.k,2*self.k), symmetric=True )
-        t = cp.Variable()   # ~~~ epigraph dummy variable
-        constraints = [ Z>>0 ]  # Z is positive semidefinite
-        for ell in range(k-1): constraints.append( cp.trace(-abt[ell]@Z)<=t )
-        objective = cp.Minimize(t)
-        problem = cp.Problem(objective,constraints)
-        problem.solve()
-        return t.value, Z.value, problem.value, problem.status
+    # ~~~ Project z onto the set of z's that satisfy \|z-y\|_{\ell^\infty}\leq\eta
+    def ell_infty_projection( self, eta=0.1 ):
+        with torch.no_grad():
+            self.z.clamp_( min=self.y-eta, max=self.y+eta )
+
 
 if __name__ == "__main__":
     #
     # ~~~ Config
-    torch.manual_seed(2025)
-    torch.set_default_dtype(torch.double)
-    k = 15
-    m =  2*k
-    f = lambda x: torch.sin(2*torch.pi*x)
-    scale = 0.2
-    x_train = torch.linspace(-1,1,m)
-    y_train = f(x_train) + scale*torch.randn_like(x_train)
+    from near_optimal.quadratic_univar import x_train, y_train, f
     v = semidefinite_spline( x_train, y_train )
-    v.z.data = torch.randn(m)
-    x_test = torch.linspace(-1,1,1001)
-    y_test = f(x_test)
-    noise = 0.25
-    #
-    # ~~~ Try gradient descent on the problem \min_z \max_\ell -\langle z,a_\ell \rangle*\langle z,b_\ell \rangle subject to \|z-y\|_\infty \leq \eta
-    v.ell_infty_projection(eta=noise)
-    optimizer = torch.optim.Adam( v.parameters(), lr=1e-3 )
-    gif = GifMaker()
-    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False )    
-    gif.capture()
-    with support_for_progress_bars():
-        for _ in tqdm(range(2000)):
-            predictions = v.z   # == v(x_train)
-            loss = (-(v.a@predictions) * (v.b@predictions)).max()
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-            v.ell_infty_projection(eta=noise)
-            if (_+1)%10==0:
-                fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False, fig=fig, ax=ax )
-                gif.capture()
-        fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", fig=fig, ax=ax, show=False )
-        gif.develop()
+    noise = 0.05
+    if noise and noise>0:
+        #
+        # ~~~ Try gradient descent on the problem \min_z \max_\ell -\langle z,a_\ell \rangle*\langle z,b_\ell \rangle subject to \|z-y\|_\infty \leq \eta
+        v.ell_infty_projection(eta=noise)
+        optimizer = torch.optim.Adam( v.parameters(), lr=1e-3 )
+        gif = GifMaker()
+        fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False )
+        gif.capture()
+        with support_for_progress_bars():
+            for _ in tqdm(range(200)):
+                predictions = v.z   # == v(x_train)
+                loss = (-(v.a@predictions) * (v.b@predictions)).max()
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                v.ell_infty_projection(eta=noise)
+                if (_+1)%10==0:
+                    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False, fig=fig, ax=ax )
+                    gif.capture()
+            fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", fig=fig, ax=ax, show=False )
+            gif.develop()
+        print(v.compute_violation())
+        print("")
+        print(f"We achieved a max abs error of {max(abs(v.z-y_train)).item()}. We know from the other experiments that it be > 0.048.")
+        print("")
     #
     # ~~~ Solve using the S-lemma
     v.S_Lemma( eps_abs=1e-2, eps_rel=1e-2, eps_infeas=1e-2 ) if noise is None else v.noisy_S_Lemma( noise, eps_abs=1e-2, eps_rel=1e-2, eps_infeas=1e-2  )
