@@ -112,6 +112,11 @@ class DualSpline(spline):
                         j -= 1
                         self.z.data[index_2j_minus_i] = a*evaluation_site + b + sum( c[ell]*(evaluation_site-tau[ell]) for ell in range(j) )
     #
+    # ~~~ Project z onto the set of z's that satisfy \|z-y\|_{\ell^\infty}\leq\eta
+    def ell_infty_projection( self, eta=0.1 ):
+        with torch.no_grad():
+            self.z.clamp_( min=self.y-eta, max=self.y+eta )
+    #
     # ~~~ Save the best upper bound which has been seen seen thus far available
     def update_upper_bound_on_primal( self, tol=1e-10 ):
         if self.compute_violation().min().item() > 1 - tol:

@@ -91,11 +91,6 @@ class spline(nn.Module):
             s[j-1] = (self.z[2*j-1] - self.z[2*j-1-1]) / self.d[j-1]    # ~~~ (z_{2j} - z_{2j-1}) / (x_{2j} - x_{2j-1})
             c[j-1] = self.z[2*j-1] - s[j-1]*self.x[2*j-1]
         return s[indices]*x + c[indices]
-    #
-    # ~~~ Project z onto the set of z's that satisfy \|z-y\|_{\ell^\infty}\leq\eta
-    def ell_infty_projection( self, eta=0.1 ):
-        with torch.no_grad():
-            self.z.clamp_( min=self.y-eta, max=self.y+eta )
 
 if __name__ == "__main__":
     #
@@ -112,9 +107,9 @@ if __name__ == "__main__":
     y_test = f(x_test)
     # points_with_curves( x=x_train,  y=y_train, curves=(v,f) )
     penalty_coefficient = 0.5
-    penalty_fn = lambda x: torch.clamp(1-x,min=0).max()  # ~~~ returns zero if x\geq0, else returns something positive
-    lr = 1e-2
-    N = 400
+    penalty_fn = lambda x: torch.clamp(1-x,min=0).max()**2  # ~~~ returns zero if x\geq1, else returns something positive
+    lr = 1e-3
+    N = 2000
     optimizer = torch.optim.Adam( v.parameters(), lr=lr )
     #
     # ~~~ Gradient Descent
@@ -132,9 +127,12 @@ if __name__ == "__main__":
             history.append(max_error.item())
             pbar.set_postfix({ "max_error" : f"{history[-1]:<4.4f}" })
     pbar.close()
-    fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), show=False, title=r"$\ell^\infty$ Error Minimization with Soft Constraints"  )
+    fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), show=False, title=r"$\ell^\infty$ Error Minimization with Soft Constraints (Penalty Functions)"  )
     with torch.no_grad():
         nodes = v.compute_break_points()
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
         plt.show()
+    print("")
+    print("Each constraint is satisfied *iff* the corresponding value is \geq 1:")
+    print("")
     print(v.compute_violation())
