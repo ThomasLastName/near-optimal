@@ -62,4 +62,4 @@ D_kappa_1_curve = []
 for M in torch.linspace( 0, M_max, M_n ):
     for kappa in (0,1):
         for mse_penalty in (0,1):
-            print( v.D_kappa( M=M, kappa=kappa, mse_penalty=mse_penalty ) )
+            print( v.D_kappa( M=M, kappa=kappa, mse_penalty=mse_penalty, solver="SCS" ) )
