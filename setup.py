@@ -7,7 +7,7 @@ from setuptools import setup, find_packages
 
 setup(
     name = 'near_optimal',
-    version = '0.10.3',
+    version = '0.11.0',
     url = 'https://github.com/ThomasLastName/near-optimal',
     author = 'Thomas Winckelman',
     author_email = 'winckelman@tamu.edu',
