@@ -152,5 +152,4 @@ if __name__=="__main__":
                 fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), title=r"$\ell^\infty$ Error Minimization with Hard Constraints", show=False, fig=fig, ax=ax )
                 gif.capture()
     pbar.close()
-    points_with_curves( x=x_train, y=y_train, curves=(v,f), title=r"$\ell^\infty$ Error Minimization with Hard Constraints", fig=fig, ax=ax )
     gif.develop()

@@ -52,7 +52,7 @@ if __name__=="__main__":
     # ~~~ Create and train the model
     model = RigorousNet(x_train)
     lr = 1e-2
-    N = 50000
+    N = 20000
     how_often = 100
     optimizer = torch.optim.Adam( model.parameters(), lr=lr )
     scheduler = torch.optim.lr_scheduler.StepLR( optimizer, step_size=5000, gamma=0.3 )
@@ -83,5 +83,4 @@ if __name__=="__main__":
                 fig, ax = points_with_curves( x=x_train.squeeze(),  y=y_train.squeeze(), grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(model,f), title=r"$\ell^\infty$ Error Minimization with Hard Constraints", show=False, fig=fig, ax=ax )
                 gif.capture()
     pbar.close()
-    points_with_curves( x=x_train.squeeze(), y=y_train.squeeze(), grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(model,f), title=r"$\ell^\infty$ Error Minimization with Hard Constraints", fig=fig, ax=ax )
     gif.develop()
