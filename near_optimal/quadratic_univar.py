@@ -7,93 +7,85 @@ from scipy.sparse.linalg import eigsh
 from scipy.optimize import root_scalar
 from tqdm.auto import tqdm, trange
 from matplotlib import pyplot as plt
-from quality_of_life.my_plt_utils import points_with_curves, GifMaker
+from quality_of_life.my_plt_utils import points_with_curves
 from quality_of_life.my_base_utils import support_for_progress_bars, my_warn
 from quality_of_life.my_cvx_utils import solve_dual_of_QCQP, solve_rank_relaxation_of_QCQP
 
-### ~~~
-## ~~~ Compute the vectors a_j and b_j for which we demand the constraint |a_j^Tz| \leq |b_j^Tz|
-### ~~~
+#
+# ~~~ Compute the vectors b_j for which we demand the constraint |a_j^Tz| \leq |b_j^Tz|
 def build_b_j(x,j):
     #
     # ~~~ Use 1-indexing, assuming that the given j is in zero-indexing to begin with
     assert len(x)%2==0
     k = len(x)//2
     assert j >= 0 and j <= k-1
-    j += 1
-    x_2jp2 = x[2*j+2-1]
-    x_2jp1 = x[2*j+1-1]
-    x_2j   = x[2*j-1]
-    x_2jm1 = x[2*j-1-1]
+    j += 1                  # ~~~ so that the formulas from the paper like x_{2j+1} are accurate
+    x_2jp2 =  x[2*j+2-1]    # ~~~ x_{2*j+2}
+    x_2jp1 =  x[2*j+1-1]    # ~~~ x_{2*j+1}
+    x_2j   =  x[2*j-1]      # ~~~ x_{2*j}
+    x_2jm1 =  x[2*j-1-1]    # ~~~ x_{2*j-1}
     #
     # ~~~ Compute the non-zero coordinates of the vector b_j
-    b_2jp2 =  (x_2jp1 - x_2j) / (x_2jp2 - x_2jp1)
-    b_2jp1 = -(x_2jp1 - x_2j) / (x_2jp2 - x_2jp1)
-    b_2j   = -(x_2jp1 - x_2j) / (x_2j - x_2jm1)
-    b_2jm1 =  (x_2jp1 - x_2j) / (x_2j - x_2jm1)
-    #
-    # ~~~ Assign the computed coefficients to the non-zero positions in the vector b_j
     b_j = torch.zeros_like(x)
-    b_j[2*j+2-1] = b_2jp2   # ~~~ b^{(j)}_{2j+2}
-    b_j[2*j+1-1] = b_2jp1   # ~~~ b^{(j)}_{2j+1}
-    b_j[2*j-1]   = b_2j     # ~~~ b^{(j)}_{2j}
-    b_j[2*j-1-1] = b_2jm1   # ~~~ b^{(j)}_{2j-1}
+    b_j[2*j+2-1] =  (x_2jp1 - x_2j) / (x_2jp2 - x_2jp1) # ~~~ b^{(j)}_{2j+2}
+    b_j[2*j+1-1] = -(x_2jp1 - x_2j) / (x_2jp2 - x_2jp1) # ~~~ b^{(j)}_{2j+1}
+    b_j[2*j-1]   = -(x_2jp1 - x_2j) / (x_2j - x_2jm1)   # ~~~ b^{(j)}_{2j}
+    b_j[2*j-1-1] =  (x_2jp1 - x_2j) / (x_2j - x_2jm1)   # ~~~ b^{(j)}_{2j-1}
     return b_j
+
+#
+# ~~~ Compute the vectors a_j for which we demand the constraint |a_j^Tz| \leq |b_j^Tz|
 def build_a_j(x,j):
     #
     # ~~~ Use 1-indexing, assuming that the given j is in zero-indexing to begin with
     assert len(x)%2==0
     k = len(x)//2
     assert j >= 0 and j <= k-1
-    j += 1
+    j += 1                  # ~~~ so that the formulas from the paper like x_{2j+1} are accurate
     x_2jp2 =  x[2*j+2-1]    # ~~~ x_{2*j+2}
     x_2jp1 =  x[2*j+1-1]    # ~~~ x_{2*j+1}
     x_2j   =  x[2*j-1]      # ~~~ x_{2*j}
     x_2jm1 =  x[2*j-1-1]    # ~~~ x_{2*j-1}
     #
     # ~~~ Compute the non-zero coordinates of the vector a_j
-    a_2jp2 =  (x_2jp1 - x_2j) / (x_2jp2 - x_2jp1)
-    a_2jp1 = -(x_2jp1 - x_2j) / (x_2jp2 - x_2jp1) - 2
-    a_2j   =  (x_2jp1 - x_2j) / (x_2j - x_2jm1) + 2
-    a_2jm1 = -(x_2jp1 - x_2j) / (x_2j - x_2jm1)
-    #
-    # ~~~ Assign the computed coefficients to the non-zero positions in the vector a_j
     a_j = torch.zeros_like(x)
-    a_j[2*j+2-1] = a_2jp2   # ~~~ a^{(j)}_{2j+2}
-    a_j[2*j+1-1] = a_2jp1   # ~~~ a^{(j)}_{2j+1}
-    a_j[2*j-1]   = a_2j     # ~~~ a^{(j)}_{2j}
-    a_j[2*j-1-1] = a_2jm1   # ~~~ a^{(j)}_{2j-1}
+    a_j[2*j+2-1] =  (x_2jp1 - x_2j) / (x_2jp2 - x_2jp1)     # ~~~ a^{(j)}_{2j+2}
+    a_j[2*j+1-1] = -(x_2jp1 - x_2j) / (x_2jp2 - x_2jp1) - 2 # ~~~ a^{(j)}_{2j+1}
+    a_j[2*j-1]   =  (x_2jp1 - x_2j) / (x_2j - x_2jm1) + 2   # ~~~ a^{(j)}_{2j}
+    a_j[2*j-1-1] = -(x_2jp1 - x_2j) / (x_2j - x_2jm1)       # ~~~ a^{(j)}_{2j-1}
     return a_j
 
 #
-# ~~~ Solve t^{a/b} + mse_penalty*t**2 == dual_max for t, from minimizing t^a + mse_penalty*MSE (\leq t^a + mse_penalty*|y-z|_{\ell^\infty}**2) subject to |y-z|_{\ell^\infty} \leq t^b
-def deduce_lower_bound_on_ERM( dual_max, mse_penalty, a, b, upper_bound_on_primal, hard_fail=True ):
+# ~~~ Solve t^{a/b} + mse_penalty*t**2 == dual_max for t... from minimizing t^a + mse_penalty*MSE subject to |y-z|_{\ell^\infty} \leq t^b
+def deduce_lower_bound_on_ERM( dual_max, mse_penalty, a, b, upper_bound_on_primal, hard_fail=False ):
     if dual_max <= 0: return 0.
     f = lambda t: t**(a/b) + mse_penalty*t**2 - dual_max    # ~~~ which we will solve for a lower bound t on |y-z|_{\ell^\infty}
     lower_bound_on_primal = dual_max**(b/a) if mse_penalty==0 else root_scalar( f=f, bracket=[0,upper_bound_on_primal] ).root
-    msg = "The supposed lower bound on the primal min is larger than the supplied upper bound on the primal min (this is mathematically incorrect, implying something is awry)."
-    if hard_fail: assert lower_bound_on_primal < upper_bound_on_primal, msg
-    else: my_warn(msg)
+    msg = f"The supposed lower bound {lower_bound_on_primal} on the primal min is larger than the supplied upper bound {upper_bound_on_primal} (this is mathematically incorrect, implying something is awry)."
+    if lower_bound_on_primal > upper_bound_on_primal:
+        if hard_fail: raise RuntimeError(msg)
+        else: my_warn(msg)
     return lower_bound_on_primal
 
 class DualSpline(spline):
     def __init__( self, x, y, eps=1e-6, lr=1e-2 ):
-        super().__init__(x,y)
-        x, self.y = self.x, self.z.detach().clone()
+        super().__init__(x,y)   # ~~~ stores y as self.z
+        x = self.x
+        self.y = self.z.detach().clone()
         self.lamb = torch.randn(self.k-1).to( device=x.device, dtype=x.dtype )**2
         self.a = torch.stack( [ build_a_j(x,j) for j in range(self.k-1) ] )
         self.b = torch.stack( [ build_b_j(x,j) for j in range(self.k-1) ] )
         self.bbt_minus_aat = torch.stack([ torch.outer(self.b[j],self.b[j]) - torch.outer(self.a[j],self.a[j]) for j in range(self.k-1) ])
         self.t = 0  # ~~~ iterations completed thus far of the Frank-Wolfe algorithm
-        self.eps = eps
         self.lr = lr
         self.lower_bounds = x_train[ 2*(torch.arange(k-1)+1)-1 ].squeeze()
         self.upper_bounds = x_train[ 2*(torch.arange(k-1)+1)   ].squeeze()
+        self.lower_bound_on_primal = 0.
+        self.upper_bound_on_primal = np.inf
         self.project()
         self.update_upper_bound_on_primal()
-        self.lower_bound_on_primal = 0.
     #
-    # ~~~ Project onto a constraint set that is equivalent to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0 for all i = 1,...,k-1
+    # ~~~ Modify z in the way that results from projecting \tau_j onto the interval [x_{2j},x_{2j+1}]
     def project(self):
         if not torch.allclose( self.z, torch.zeros_like(self.z) ):  # ~~~ prevent a common failure case (but not all possible failure cases)
             with torch.no_grad():
@@ -111,34 +103,41 @@ class DualSpline(spline):
                         j -= 1
                         self.z.data[index_2j_minus_i] = a*evaluation_site + b + sum( c[ell]*(evaluation_site-tau[ell]) for ell in range(j) )
     #
-    # ~~~ Project z onto the set of z's that satisfy \|z-y\|_{\ell^\infty}\leq\eta
+    # ~~~ Project z onto the box constraint set \|z-y\|_{\ell^\infty}\leq\eta
     def ell_infty_projection( self, eta=0.1 ):
         with torch.no_grad():
             self.z.clamp_( min=self.y-eta, max=self.y+eta )
     #
     # ~~~ Save the best upper bound which has been seen seen thus far available
     def update_upper_bound_on_primal( self, tol=1e-10 ):
-        if self.compute_violation().min().item() > 1 - tol:
-            current_upper_bound = (self.z-self.y).abs().max().item()
-            if hasattr( self, "upper_bound_on_primal" ):
-                self.upper_bound_on_primal = min( current_upper_bound, self.upper_bound_on_primal )
-                if current_upper_bound == self.upper_bound_on_primal: self.best_z = self.z.data.clone()
-            else:
-                self.upper_bound_on_primal = current_upper_bound
+        with torch.no_grad():
+            if self.compute_violation().min().item() >= 1 - tol: # ~~~ if the constraints are satisfied (up to numerical tolerance)
+                current_upper_bound = (self.z-self.y).abs().max().item()
+                if current_upper_bound < self.upper_bound_on_primal:
+                    self.upper_bound_on_primal = current_upper_bound
+                    self.best_z = self.z.data.clone()
     #
-    # ~~~ Minimize MSE(z,y) subject to (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 for all i = 1,...,k-1
-    def solve_dual_of_mse_minimization( self, *args, breakpoint_reg=0., weighted_mean=False, **kwargs ):
+    # ~~~ Solve the dual problem of "minimize MSE(z,y) subject to (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 for all i = 1,...,k-1"
+    def solve_dual_of_mse_minimization( self, *args, breakpoint_reg=0., weighted_mean=False, **kwargs ):    # ~~~ originally had an `mse_penalty` argument but, empirically, that appeared to have no effect
+        #
+        # ~~~ Setup
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
-        if weighted_mean:
-            c = cp.Variable(m)
-            constraints = [ c>=0, cp.sum(c)==1 ]
+        #
+        # ~~~ Whether to use straight MSE or solve for the weights that give the best dual lower bound, as in the computation of what's called b^* in the paper
+        if weighted_mean:   # ~~~ then this method computes what is called $b^*$ in the paper
+            w = cp.Variable(m)
+            constraints = [ w>=0, cp.sum(w)==1 ]
         else:
             constraints = []
-        H_o = (1/m)*np.eye(m) if not weighted_mean else cp.diag(c)
-        c_o = -(1/m)*self.y.cpu().numpy() if not weighted_mean else -cp.multiply( c, self.y.cpu().numpy() )
-        d_o = (1/m)*(self.y**2).sum().item() if not weighted_mean else cp.sum(cp.multiply( c, self.y.cpu().numpy()**2 ))
+        #
+        # ~~~ Build and solve problem
+        H_o =  (1/m)*np.eye(m)                if not weighted_mean else  cp.diag(w)
+        c_o = -(1/m)*self.y.cpu().numpy()     if not weighted_mean else -cp.multiply( w, self.y.cpu().numpy() )
+        d_o =  (1/m)*(self.y**2).sum().item() if not weighted_mean else  cp.sum(cp.multiply( w, self.y.cpu().numpy()**2 ))
         problem, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, constraints=constraints, **kwargs )
+        #
+        # ~~~ Process results
         self.z.data = torch.from_numpy(z)
         self.problem = problem  # ~~~ for reference if diagnostics are necessary
         self.project()
@@ -147,14 +146,102 @@ class DualSpline(spline):
         self.lower_bound_on_primal = max( self.lower_bound_on_primal, dual_max )
         return dual_max
     #
-    # ~~~ Solve the dual problem of minimize t^a+MSE(y,z)/m subject to (a[i].T@z)**2 - (b[i].T@z)**2 <= 0 and (z_j-y_j)**2 - t^b \leq 0
+    # ~~~ Same as the above, but with more options that I experimented with (including both eqations (9) and (10) from the paper as special cases)
+    def solve_dual_of_mse_minimization_with_more_options( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=False, breakpoint_reg=0, non_negative_epigraph=True, weighted_mean=False, z_squared_constraint=True, **kwargs ):
+        #
+        # ~~~ Setup
+        if t_squared_constraint and not (t_squared_objective or non_negative_epigraph): my_warn("Minimizing t subject to |y_j-z_j|^2 <= t^2 ain't good...")
+        aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
+        m = len(self.y)
+        y_np = self.y.cpu().numpy().flatten()
+        if mse_penalty==0:
+            if weighted_mean: my_warn("`weighted_mean=True` will be ignored because `mse_penalty==0`.")
+            weighted_mean = False
+        #
+        # ~~~ Whether to use straight MSE or solve for the weights that give the best dual lower bound, as in the computation of what's called b^* in the paper
+        if weighted_mean:
+            w = cp.Variable(m)
+            constraints = [ w >= 0, cp.sum(w) == mse_penalty ]
+        else:
+            w = (mse_penalty/m) * np.ones(m)
+            constraints = []
+        #
+        # ~~~ Build objective function
+        concatenate = cp.hstack   if weighted_mean else np.concatenate
+        diag        = cp.diag     if weighted_mean else np.diag
+        multiply    = cp.multiply if weighted_mean else np.multiply
+        H_o = diag(concatenate([ w, [1. if t_squared_objective else 0.] ]))
+        c_o = concatenate([ -multiply(w,y_np), [0. if t_squared_objective else 1/2] ])
+        d_o = sum(multiply( w, y_np**2 ))
+        #
+        # ~~~ Build constraints
+        if z_squared_constraint:
+            #
+            # ~~~ Constraints (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 and (z_j-y_j)**2 - t^b \leq 0
+            H_I = np.concatenate([
+                    np.pad( aat_minus_bbt, ( (0,0), (0,1), (0,1) ) ),
+                    np.stack([
+                            np.diag( j*[0.] + [1.] + (m-j-1)*[0.] + [-1. if t_squared_constraint else 0.]) 
+                            for j in range(m)
+                        ])
+                ])
+            c_I = np.vstack([
+                    np.zeros(( self.k-1, m+1 )),
+                    np.hstack(( np.diag(-y_np), -(not t_squared_constraint)*np.ones((m,1))/2 ))
+                ])
+            d_I = np.concatenate([
+                    breakpoint_reg*np.ones(self.k-1),
+                    y_np**2
+                ])
+            b = (t_squared_constraint + 1) / 2
+        else:
+            #
+            # ~~~ Simon suggested this instead of the non-convex quadratic epigraph constraint that I was using, as in eq'n (9) in the paper (unless revisions have resulted in this number changing)
+            H_I = np.concatenate([
+                    np.pad( aat_minus_bbt, ( (0,0), (0,1), (0,1) ) ),
+                    np.zeros(( 2*m, m+1, m+1 ))
+                ])
+            if t_squared_constraint:
+                for j in range(2*m):
+                    H_I[ self.k+j-1, -1, -1 ] = -1.
+            c_I = np.vstack([
+                    np.zeros(( self.k-1, m+1 )),
+                    np.hstack([ np.eye(m), -(not t_squared_constraint)*np.ones((m,1)) ])/2,
+                    np.hstack([-np.eye(m), -(not t_squared_constraint)*np.ones((m,1)) ])/2
+                ])
+            d_I = np.concatenate([ breakpoint_reg*np.ones(self.k-1), -y_np, y_np ])
+            b = t_squared_constraint + 1
+        #
+        # ~~~ Optionally, add t >= 0 constraint if desired (I don't think it makes any difference?)
+        if non_negative_epigraph:
+            H_I = np.concatenate([ H_I, np.zeros(( 1, m+1, m+1 )) ])
+            c_I = np.concatenate([ c_I, np.array(m*[0.] + [-1.]).reshape(1,m+1) ])
+            d_I = np.concatenate([ d_I, [0.] ])
+        #
+        # ~~~ Solve the problem and process the results
+        problem, _, zt = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, constraints=constraints, **kwargs )
+        self.z.data = torch.from_numpy(zt[:-1])
+        self.problem = problem
+        self.project()
+        self.update_upper_bound_on_primal()
+        lower_bound = deduce_lower_bound_on_ERM(
+                dual_max = problem.objective.value,
+                mse_penalty = mse_penalty,
+                a = t_squared_objective + 1,
+                b = b,
+                upper_bound_on_primal = self.upper_bound_on_primal
+            )
+        self.lower_bound_on_primal = max( self.lower_bound_on_primal, lower_bound )
+        return lower_bound
+    #
+    # ~~~ Solve the dual problem of "minimize t^a + mse_penalty*MSE(y,z) subject to (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 and (z_j-y_j)**2 - t^b \leq 0"
     def S_Lemma_1( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=False, breakpoint_reg=0, non_negative_epigraph=True, weighted_mean=False, **kwargs ):
         if t_squared_constraint and not (t_squared_objective or non_negative_epigraph): my_warn("Minimizing t subject to |y_j-z_j|^2 \leq t^2 ain't good...")
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
         m = len(self.y)
         use_uniform_weights = mse_penalty==0 or not weighted_mean
         if use_uniform_weights:
-            weights = (mse_penalty/m)*np.ones(m)*np.ones(m)
+            weights = (mse_penalty/m)*np.ones(m)
             constraints = []
             if weighted_mean: my_warn("`weighted_mean=True` will be ignored because `mse_penalty==0`.")
         else:
@@ -219,7 +306,7 @@ class DualSpline(spline):
         m = len(self.y)
         use_uniform_weights = mse_penalty==0 or not weighted_mean
         if use_uniform_weights:
-            weights = (mse_penalty/m)*np.ones(m)*np.ones(m)
+            weights = (mse_penalty/m)*np.ones(m)
             constraints = []
             if weighted_mean: my_warn("`weighted_mean=True` will be ignored because `mse_penalty==0`.")
         else:
@@ -323,9 +410,10 @@ class DualSpline(spline):
             self.S_Lemma_1( *args, mse_penalty=mse_penalty, t_squared_objective=(epigraph_objective=="quadratic") **kwargs )
         #
         # ~~~ Diagnostics
-        worst_offender = self.compute_violation().min().item()
-        if worst_offender<1:
-            my_warn(f"The approximate primal solution fails to define an element of V (error is roughly {1-worst_offender}). If a primal solution is desired, try specifying a slightly larger (but still very small) value for the argument `breakpoint_reg` (default is 0)")
+        with torch.no_grad():
+            worst_offender = self.compute_violation().min().item()
+            if worst_offender<1:
+                my_warn(f"The approximate primal solution fails to define an element of V (error is roughly {1-worst_offender}). If a primal solution is desired, try specifying a slightly larger (but still very small) value for the argument `breakpoint_reg` (default is 0)")
     #
     # ~~~ Minimize the constant function 1 subject to \|z-y\|_2^2<=noise and (a[i].T@z)**2 - (b[i].T@z)**2 <= 0
     def S_Lemma_4( self, noise=0.1, *args, **kwargs  ):
@@ -344,12 +432,6 @@ class DualSpline(spline):
         #
         # ~~~ Solve the dual
         _, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
-        #
-        # ~~~ Process the results
-        # self.lamb = torch.from_numpy(lamb).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        # self.Q = torch.from_numpy( (lamb.reshape(-1,1,1)*H_I).sum(axis=0) ).to( device=self.lamb.device, dtype=self.lamb.dtype )
-        # self.z.data = torch.linalg.solve( self.Q, self.y*lamb[-1]/m )
-        # print(f"The dual max is {gamma}")
         self.z.data = torch.from_numpy(z)
     #
     # ~~~ Minimize t+mse_penalty*MSE(y,z) subject to |s_jx + c_j - y| \leq t for both data pairs (x,y), for j=1,...,k, and subject to p_j(s_1,...,s_k,c_1,...,c_k) \leq 0
@@ -622,6 +704,7 @@ if __name__ == "__main__":
     #     gif.develop()
     #
     # ~~~ Solve using the S-lemma
+    b_star = v.solve_dual_of_mse_minimization(weighted_mean=True)
     if N is None:
         val = v.solve_dual_of_mse_minimization( solver="SCS", eps=1e-6 )
         best_z = v.z.data.clone()
@@ -647,7 +730,11 @@ if __name__ == "__main__":
                         best_z = v.z.data.clone()
         pbar.close()
     v.z.data = best_z
-    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="The Result of Some Quadratic Program" )
+    with torch.no_grad(): pred = v(x_train)
+    max_abs_error = (pred-y_train).abs().max().item()
+    mean_sq_error = ((pred-y_train)**2).mean().item()
+    suboptimality_ratio = max_abs_error/b_star
+    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title=f"The Result of Some Quadratic Program (sub-optimality ratio: {suboptimality_ratio})" )
     with torch.no_grad():
         nodes = v.compute_break_points()
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
@@ -755,6 +842,21 @@ if __name__ == "__main__":
     legend_labels = [f"{label}" for label in by_label]  # Include line style in label
     plt.legend( legend_handles, legend_labels, fontsize=8.2, )
     plt.show()
-    print(v.compute_violation())
-
-#
+    #
+    # ~~~ Finer option
+    v.solve_dual_of_mse_minimization_with_more_options(mse_penalty=1)
+    with torch.no_grad(): pred = v(x_train)
+    new_max_abs_error = (pred-y_train).abs().max().item()
+    new_mean_sq_error = ((pred-y_train)**2).mean().item()
+    new_suboptimality_ratio = new_max_abs_error/b_star
+    print("")
+    print('The "Slightly more Refined Quadratic Program" may be considered "better" depending on the following stats....')
+    print(f"   mean sq error {'down' if new_mean_sq_error<mean_sq_error else 'up'} from {mean_sq_error} to {new_mean_sq_error}")
+    print(f"   max abs error {'down' if new_max_abs_error<max_abs_error else 'up'} from {max_abs_error} to {new_max_abs_error} (this is the one our theory cares about)")
+    print(f"   sub-optimality ratio {'down' if new_suboptimality_ratio<suboptimality_ratio else 'up'} from {suboptimality_ratio} to {new_suboptimality_ratio} (anything <2 is good)")
+    print("")
+    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="Slightly more Refined Quadratic Program (see stdout for stats)" )
+    with torch.no_grad():
+        nodes = v.compute_break_points()
+        ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
+    plt.show()
