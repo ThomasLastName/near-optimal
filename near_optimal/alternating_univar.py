@@ -1,3 +1,16 @@
+"""
+This file implements an idea that was suggested by my advisor:
+an *alternating* optimization where you alternate between:
+ - Holding the break points fixed and optimizing only the coefficients
+ - Holding the coefficients fixed and optimizing only the break points
+
+Part of the appeal of this is method is that each of the two simpler sub-problems
+can be exactly solved as a semi-definite program.
+
+IDK though...
+it doesn't seem to work an better than the methods in quadratic_univar.py
+nor is this any more rigorous.
+"""
 
 import math
 import numpy as np

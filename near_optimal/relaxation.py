@@ -1,3 +1,16 @@
+"""
+In this file, we try the natural semi-definite of the problem
+
+\min_z (1/m)\|y-z\|_2^2  s.t. (z^Ta_j)^2 \leq (z^Tb)^2, j<k
+
+Namely, we introduce Z as a stand-in for the outer product zz^T
+Then, to deal with anywhere that z enters quadratically, we use z
+and, to relate Z back to z, we employ the constraint Z \geq zz^T
+(a semi-definite inequality) which can be forced as a semi-definite
+constraint using the Schur complement.
+See https://www.princeton.edu/~aaa/Public/Teaching/ORF523/ORF523_Lec12.pdf
+Empirically, this doesn't work. Just sayin', we tried it.
+"""
 
 import numpy as np
 import cvxpy as cp

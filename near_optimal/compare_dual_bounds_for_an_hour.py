@@ -1,5 +1,8 @@
+"""
+Since there are so many different ways to formulate the problem as a quadratic program,
+in this file, we just test a bunch of them to get a sense of what works and what doesn't.
+"""
 
-import torch
 import cvxpy as cvx
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,7 +15,7 @@ from time import time
 from quality_of_life.my_base_utils import support_for_progress_bars
 
 
-from near_optimal.quadratic_univar import x_train, y_train, m, DualSpline
+from near_optimal.quadratic_univar import x_train, y_train, DualSpline
 v = DualSpline( x_train, y_train )
 
 # weighted_mse_lower_bound = v.solve_dual_of_mse_minimization( weighted_mean=True, print_info=False )

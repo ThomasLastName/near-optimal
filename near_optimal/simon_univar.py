@@ -1,3 +1,20 @@
+"""
+Here, we test a couple of things simultaneously.
+
+First, we test one of the *many* different equivalent formulations of
+the constraints on break points: this formulation proposed by Simon.
+
+Second, we test constraining error(z) \leq noise where noise not a variable, but rather
+rather user-specified level of how much noise would be tolerable. Specifically,
+ - We apply ADAM with a projection step to the problem
+    "minimize break-point-constraints subject to \max_j |z_j-y_j| \leq noise"
+    where the projection of z onto this box constraint is quite easy to implement.
+ - We solve the dual of the quadratic feasibility program
+    "minimize break-point-constraints subject to mse(z,y) \leq noise"
+
+These both work okay-ish but not, like, spectacularly good or anything.
+No obvious improvement over the other methods implemented in `quadratic_univar.py`
+"""
 
 import torch
 from near_optimal.gradient_univar import spline

@@ -1,3 +1,18 @@
+"""
+This was the first thing I tried.
+I DO NOT RECOMMEND THIS ALGORITHM.
+I just minimized "error + penalty terms"
+You can see that it doesn't work upon a first attempt.
+Of course, you may posit:
+  "Maybe you'd get better results with a different penalty function?"
+  "Maybe you'd get better results if you used the mean squared error?"
+But that's just the issue, isn't it? Penalty functions can be quite hard to tune.
+I don't recommend tuning the use of penalty functions,
+as we can provide not just one *but two* methods that are more reliable:
+ - ADAM with a projection step
+ - solving the dual of a quadratic program
+both of which are implemented in the file `quadratic_univar.py`.
+"""
 
 import torch
 from torch import nn

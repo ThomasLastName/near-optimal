@@ -1,3 +1,7 @@
+"""
+Implement the unusual method training method involving quadratic programming
+"""
+
 import torch
 from torch import nn
 from near_optimal.gradient_univar import spline
@@ -58,6 +62,19 @@ def build_a_j(x,j):
 #
 # ~~~ Solve t^{a/b} + mse_penalty*t**2 == dual_max for t... from minimizing t^a + mse_penalty*MSE subject to |y-z|_{\ell^\infty} \leq t^b
 def deduce_lower_bound_on_ERM( dual_max, mse_penalty, a, b, upper_bound_on_primal, hard_fail=False ):
+    """
+    Call "dual_max" the dual max of "min_{z,t}( t^a + C*MSE(z,y) S.T. \|z-y\|_{\ell^\infty} \leq t^b and other constraints on z)"
+    Notice that we have \|z-y\|_{\ell^\infty}==t^b at the optimum. Then, t^a==(t^b)^{a/b}==\|z-y\|_{\ell^\infty}^{b/a}, and so
+    min_{z,t}(the above) == \min_z( \|z-y\|_{\ell^\infty}^{a/b} + C*MSE(z,y) S.T. aforementioned other constraints on z).
+    Using the facts that:
+     - MSE(z,y) < =\|z-y\|_{\ell^\infty}
+     - f(x) := x^{a/b} + C*x is an increasing bijection (0,\infty)\to(0,\infty)
+     - f^{-1}(x) is thus also an increasing bijection (0,\infty)\to(0,\infty)
+    We obtain dual_max <= f(opt) from the first two facts,
+    where we introduce opt := \min_z(|z-y\|_{\ell^\infty}^{a/b} S.T. aforementioned other constraints on z)
+    and finally dual_max <= f(opt) \implies f^{-1}(dual_max) <= opt thanks to the last fact.
+    Therefore, this function returns f^{-1}(dual_max).
+    """
     if dual_max <= 0: return 0.
     f = lambda t: t**(a/b) + mse_penalty*t**2 - dual_max    # ~~~ which we will solve for a lower bound t on |y-z|_{\ell^\infty}
     lower_bound_on_primal = dual_max**(b/a) if mse_penalty==0 else root_scalar( f=f, bracket=[0,upper_bound_on_primal] ).root

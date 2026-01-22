@@ -1,8 +1,10 @@
+"""
+This is basically the same as https://colab.research.google.com/drive/1C6Xgo9C-U-ZTcxDtap7I44Ao-Pd785Fq?usp=sharing
+"""
 
 import torch
 from torch import nn
 from tqdm.auto import tqdm
-from matplotlib import pyplot as plt
 from quality_of_life.my_plt_utils import points_with_curves, GifMaker
 from quality_of_life.my_base_utils import support_for_progress_bars
 
@@ -57,7 +59,7 @@ if __name__=="__main__":
     #
     # ~~~ Gradient Descent
     history = []
-    fig, ax = points_with_curves( x=x_train.squeeze(),  y=y_train.squeeze(), grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(model,f), title=r"$\ell^\infty$ Error Minimization with Hard Constraints", show=False )
+    fig, ax = points_with_curves( x=x_train.squeeze(),  y=y_train.squeeze(), grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(model,f), title=r"$\ell^\infty$ Error Minimization with Hard Constraints (Projected Gradient Descent)", show=False )
     gif = GifMaker()
     gif.capture()
     best_error = torch.inf
