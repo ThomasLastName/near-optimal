@@ -154,16 +154,18 @@ if __name__ == "__main__":
                     gif.capture()
             fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", fig=fig, ax=ax, show=False )
             gif.develop()
-        print(v.compute_violation())
         print("")
-        print(f"We achieved a max abs error of {max(abs(v.z-y_train)).item()}. We know from the other experiments that it be > 0.048.")
+        if v.compute_violation().detach().min().item()>=1: print(f"Constraints are satisfied and we achieved a max abs error of {max(abs(v.z-y_train)).item()}. We know from the other experiments that it must be > 0.048.")
+        else: print("Constraints not satisfied")
         print("")
     #
-    # ~~~ Solve using the S-lemma
+    # ~~~ Solve the dual program (THIS ONE DOESN'T WORK AS WELL, not even if you adjust the dual solution as described in the paper)
     v.S_Lemma( eps_abs=1e-2, eps_rel=1e-2, eps_infeas=1e-2 ) if noise is None else v.noisy_S_Lemma( noise, eps_abs=1e-2, eps_rel=1e-2, eps_infeas=1e-2  )
     best_z = v.z.data.clone()
     v.z.data = best_z
     fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="MSE Minimization Subject to Constraints on the Location of Breakpoints" )
+    from near_optimal.quadratic_univar import DualSpline
+    v = DualSpline( x_train, v(x_train).detach() )  # ~~~ __init__ method adjusts the dual solution as described in the paper
     with torch.no_grad():
         nodes = v.compute_break_points()
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
