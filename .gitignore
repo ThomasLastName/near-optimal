@@ -163,3 +163,4 @@ cython_debug/
 
 # Other
 .DS_Store   # a mac thing
+*.gif
