@@ -163,9 +163,9 @@ if __name__ == "__main__":
     v.S_Lemma( eps_abs=1e-2, eps_rel=1e-2, eps_infeas=1e-2 ) if noise is None else v.noisy_S_Lemma( noise, eps_abs=1e-2, eps_rel=1e-2, eps_infeas=1e-2  )
     best_z = v.z.data.clone()
     v.z.data = best_z
-    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="MSE Minimization Subject to Constraints on the Location of Breakpoints" )
     from near_optimal.quadratic_univar import DualSpline
     v = DualSpline( x_train, v(x_train).detach() )  # ~~~ __init__ method adjusts the dual solution as described in the paper
+    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="Via dual programming" )
     with torch.no_grad():
         nodes = v.compute_break_points()
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
