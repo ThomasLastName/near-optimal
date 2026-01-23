@@ -1,6 +1,7 @@
 """
 Since there are so many different ways to formulate the problem as a quadratic program,
 in this file, we just test a bunch of them to get a sense of what works and what doesn't.
+Note, the figure is *NOT* presentation-ready. It's just for my own needs.
 """
 
 import cvxpy as cvx
@@ -49,7 +50,7 @@ with support_for_progress_bars():
             print("An hour is up!")
             break
         else:
-            settings = { "mse_penalty":mse_penalty, "tol":tol, "breakpoint_reg":breakpoint_reg, "t_squared_objective":t_squared_objective }
+            settings = { "mse_penalty":mse_penalty, "tol":tol, "breakpoint_reg":breakpoint_reg, "t_squared_objective":t_squared_objective, "z_squared_objective":z_squared_objective }
             already_computed_it = any(
                     all( are_equal(d[key],value) for key, value in settings.items()) 
                     for d in data
@@ -63,6 +64,7 @@ with support_for_progress_bars():
                         "tol" : tol,
                         "breakpoint_reg" : breakpoint_reg,
                         "t_squared_objective" : t_squared_objective,
+                        "z_squared_objective" : z_squared_objective,
                         "lower_bound" : lower_bound,
                         "upper_bound" : upper_bound
                     })
@@ -84,25 +86,25 @@ color_map = {tuple(row): palette[i] for i, row in enumerate(unique_combinations.
 #
 # ~~~ Define line styles for different `tol` values
 linestyle_map = {1e-9: "-", 1e-6: "--"}
-plt.figure(figsize=(10, 6))
+_ = plt.figure(figsize=(10, 6))
 
 #
 # ~~~ Plot each group separately
-for (breakpoint_reg, t_squared_objective, tol), group in data.groupby(["breakpoint_reg", "t_squared_objective", "tol"]):
-    color = color_map[(breakpoint_reg, t_squared_objective)]
+for (breakpoint_reg, t_squared_objective, tol, z_squared_objective), group in data.groupby(["breakpoint_reg", "t_squared_objective", "tol", "z_squared_objective"]):
+    color = color_map[(breakpoint_reg, t_squared_objective, z_squared_objective)]
     linestyle = linestyle_map[group["tol"].iloc[0]]
     #
     # ~~~ Plot lower bound
-    plt.plot(group["mse_penalty"], group["lower_bound"], color=color, linestyle=linestyle, label=f"({breakpoint_reg}, {t_squared_objective}, tol={group['tol'].iloc[0]})")
+    _ = plt.plot(group["mse_penalty"], group["lower_bound"], color=color, linestyle=linestyle, label=f"({breakpoint_reg}, {t_squared_objective}, {z_squared_objective}, tol={group['tol'].iloc[0]})")
     #
     # ~~~ Plot upper bound using the same color
-    plt.plot(group["mse_penalty"], group["upper_bound"], color=color, linestyle=linestyle)
+    _ = plt.plot(group["mse_penalty"], group["upper_bound"], color=color, linestyle=linestyle)
 
-plt.xlabel("MSE Penalty")
-plt.ylabel("Bound Values")
-plt.title(f"Lower and Upper Bounds vs. MSE Penalty")
-plt.legend(title="(breakpoint_reg, t_squared_objective, tol)")
-plt.ylim(0, 0.1)  # Set y-axis limits
-plt.grid(True)
-plt.show()
+_ = plt.xlabel("MSE Penalty")
+_ = plt.ylabel("Bound Values")
+_ = plt.title(f"Lower and Upper Bounds vs. MSE Penalty")
+_ = plt.legend( title="(breakpoint_reg, t_squared_objective, tol)", loc="lower right" )
+_ = plt.ylim(0, 0.1)  # Set y-axis limits
+_ = plt.grid(True)
+_ = plt.show()
 
