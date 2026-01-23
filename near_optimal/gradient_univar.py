@@ -99,13 +99,8 @@ class spline(nn.Module):
     def forward( self, x ):
         nodes = self.compute_break_points()
         indices = torch.searchsorted( nodes, x )
-        c = torch.zeros_like(self.d)
-        s = torch.zeros_like(self.d)
-        for j in range(self.k):
-            j += 1
-            s[j-1] = (self.z[2*j-1] - self.z[2*j-1-1]) / self.d[j-1]    # ~~~ (z_{2j} - z_{2j-1}) / (x_{2j} - x_{2j-1})
-            c[j-1] = self.z[2*j-1] - s[j-1]*self.x[2*j-1]
-        return s[indices]*x + c[indices]
+        self.compute_slopes_and_intercepts()
+        return self.slopes[indices]*x + self.intercepts[indices]
 
 if __name__ == "__main__":
     #
