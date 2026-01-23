@@ -103,7 +103,7 @@ class DualSpline(spline):
         self.update_upper_bound_on_primal()
     #
     # ~~~ Modify z in the way that results from projecting \tau_j onto the interval [x_{2j},x_{2j+1}]
-    def project(self):
+    def project( self, tol=1e-10 ):
         if not torch.allclose( self.z, torch.zeros_like(self.z) ):  # ~~~ prevent a common failure case (but not all possible failure cases)
             with torch.no_grad():
                 tau = self.compute_break_points()
@@ -112,6 +112,7 @@ class DualSpline(spline):
                 a = self.slopes[0]
                 b = self.intercepts[0]
                 c = self.slopes.diff()
+                tau = torch.where( c.abs()>tol, tau, self.c )
                 for j in range(self.k):
                     for i in [1,0]:
                         j += 1

@@ -55,7 +55,7 @@ class spline(nn.Module):
         self.compute_slopes_and_intercepts()
     #
     # ~~~ Compute the thing that we want to be \geq 1
-    def compute_violation( self ):
+    def compute_violation( self, tol=1e-10 ):
         a = torch.zeros_like(self.d)
         s = torch.zeros_like(self.d)
         for j in range(self.k):
@@ -64,10 +64,11 @@ class spline(nn.Module):
             s[j-1] = (self.z[2*j-1] - self.z[2*j-1-1]) / self.d[j-1]    # ~~~ (z_{2j} - z_{2j-1}) / (x_{2j} - x_{2j-1})
         second_deriv = s.diff()                                         # ~~~ j-th component is (s[j+1] - s[j])
         violator = (s*self.m).diff() - a.diff() - second_deriv*self.c   # ~~~ constraint is that this should have absolute value at most self.D/2*second_deriv.abs()
-        return self.D/2 * second_deriv.abs() / violator.abs()
+        should_be_geq_1 = self.D/2 * second_deriv.abs() / violator.abs()
+        return torch.where( second_deriv.abs()>tol, should_be_geq_1, torch.full_like(should_be_geq_1,float("inf")) )
     #
     # ~~~ Compute the points at which the neighboring lines intersect
-    def compute_break_points( self ):
+    def compute_break_points( self, tol=1e-10 ):
         a = torch.zeros_like(self.d)
         s = torch.zeros_like(self.d)
         nodes = torch.zeros_like(self.c)
@@ -79,10 +80,10 @@ class spline(nn.Module):
             nodes[j] = (
                     s[j+1]*self.m[j+1] - s[j]*self.m[j] - (a[j+1] - a[j])
                 ) / (
-                    s[j+1] - s[j]
+                    s[j+1] - s[j] if abs(s[j+1]-s[j])>tol else 1
                 )
-        self.nodes = nodes
-        return nodes
+        self.nodes = torch.where( s.diff().abs()>tol, nodes, self.c )
+        return self.nodes
     #
     # ~~~ Using z, compute the slopes and intercepts of each linear piece
     def compute_slopes_and_intercepts(self):
