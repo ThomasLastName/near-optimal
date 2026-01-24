@@ -721,14 +721,16 @@ if __name__ == "__main__":
     fig, ax = points_with_curves(
             x = x_train,
             y = y_train,
-            curves = ( big_model, ocassional_model, v, f ),
+            marker_size  = 6,  # ~~~ size of the scatter plot
+            curves       = ( big_model, ocassional_model, v,        f       ),
+            curve_colors = ( "black",   "grey",           "blue",   "green" ),
+            curve_marks  = [ "-",       "-",              "-",      "--"    ],
             curve_labels = ( "Large Network Trained with ADAM", "Large Network Trained with ADAM and Early Stopping", "Small Network Trained with Our Method", "Ideal Fit" ),
-            curve_colors = ( "black", "grey", "blue", "green"),
-            curve_marks  = [ "-", "-", "-", "--" ],
             ylim = [-1.1,1.1],
+            figsize = (8,4),
             show = False,
             title = "Comparison of Our Model with ADAM and Larger Neural Networks",
-            model_fit = False
+            model_fit = False  # ~~~ deactivate default settings
         )
     handles, labels = plt.gca().get_legend_handles_labels()
     unique_labels = list(set(labels))  # Get unique labels
@@ -741,6 +743,7 @@ if __name__ == "__main__":
     legend_handles = [by_label[label][0] for label in by_label]
     legend_labels = [f"{label}" for label in by_label]  # Include line style in label
     plt.legend( legend_handles, legend_labels, fontsize=8.2, )
+    # plt.savefig(dpi=400)
     plt.show()
     #
     # ~~~ Finer option
