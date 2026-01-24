@@ -261,7 +261,7 @@ class DualSpline(spline):
             #
             # ~~~ Constraints (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 and (z_j-y_j)**2 - t^b \leq 0
             H_I = np.concatenate([
-                    np.pad( aat_minus_bbt, ( (0,0), (0,1), (0,1) ) ),
+                    np.pad( aat_minus_bbt, ( (0,0), (0,1), (0,1) ) ),   # ~~~ pad the "actual constraints" with zero for the epigraph variable
                     np.stack([
                             np.diag( j*[0.] + [1.] + (m-j-1)*[0.] + [-1. if t_squared_constraint else 0.]) 
                             for j in range(m)
@@ -280,7 +280,7 @@ class DualSpline(spline):
             #
             # ~~~ Simon suggested this instead of the non-convex quadratic epigraph constraint that I was using, as in eq'n (9) in the paper (unless revisions have resulted in this number changing)
             H_I = np.concatenate([
-                    np.pad( aat_minus_bbt, ( (0,0), (0,1), (0,1) ) ),
+                    np.pad( aat_minus_bbt, ( (0,0), (0,1), (0,1) ) ),   # ~~~ pad the "actual constraints" with zero for the epigraph variable
                     np.zeros(( 2*m, m+1, m+1 ))
                 ])
             if t_squared_constraint:
@@ -320,9 +320,9 @@ class DualSpline(spline):
         #
         # ~~~ Set the objective function to be identically equal to 1.
         m = len(self.y)
-        d_o = 1.
-        c_o = np.zeros(m)
         H_o = np.eye(m)
+        c_o = np.zeros(m)
+        d_o = 1.
         #
         # ~~~ Set the inequality constraints
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()                   # ~~~ shape (self.k-1, m, m)
