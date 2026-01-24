@@ -8,7 +8,7 @@ Recall that the paper suggests two main algorithms:
  - ADAM with a projection step
  - Solving the dual of a quadratic program
 
-I think the easiest thing to digest on an initial inspection is a minimal demo of the former.
+For an initial viewing of the code, I think the easiest thing to digest is a minimal demo of the former:
 __PLEASE SEE [this colab demo](https://colab.research.google.com/drive/1C6Xgo9C-U-ZTcxDtap7I44Ao-Pd785Fq?usp=sharing)__
 
 
