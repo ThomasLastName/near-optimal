@@ -13,7 +13,7 @@ from tqdm.auto import tqdm, trange
 from matplotlib import pyplot as plt
 from quality_of_life.my_plt_utils import points_with_curves
 from quality_of_life.my_base_utils import support_for_progress_bars, my_warn
-from quality_of_life.my_cvx_utils import solve_dual_of_QCQP, solve_rank_relaxation_of_QCQP
+from quality_of_life import my_cvx_utils as mcu
 
 #
 # ~~~ Compute the vectors b_j for which we demand the constraint |a_j^Tz| \leq |b_j^Tz|
@@ -60,24 +60,24 @@ def build_a_j(x,j):
     return a_j
 
 #
-# ~~~ Solve t^{a/b} + mse_penalty*t**2 == dual_max for t... from minimizing t^a + mse_penalty*MSE subject to |y-z|_{\ell^\infty} \leq t^b
-def deduce_lower_bound_on_ERM( dual_max, mse_penalty, a, b, upper_bound_on_primal, hard_fail=False ):
+# ~~~ Solve t^{a/b} + mse_penalty*t**2 == lb_on_min for t... from minimizing t^a + mse_penalty*MSE subject to |y-z|_{\ell^\infty} \leq t^b
+def deduce_lower_bound_on_ERM( lb_on_min, mse_penalty, a, b, upper_bound_on_primal, hard_fail=False ):
     """
-    Call "dual_max" the dual max of "min_{z,t}( t^a + C*MSE(z,y) S.T. \|z-y\|_{\ell^\infty} \leq t^b and other constraints on z)"
+    Assume "lb_on_min" is a lower bound on "min_{z,t}( t^a + C*MSE(z,y) S.T. \|z-y\|_{\ell^\infty} \leq t^b and other constraints on z)"
     Notice that we have \|z-y\|_{\ell^\infty}==t^b at the optimum. Then, t^a==(t^b)^{a/b}==\|z-y\|_{\ell^\infty}^{b/a}, and so
     min_{z,t}(the above) == \min_z( \|z-y\|_{\ell^\infty}^{a/b} + C*MSE(z,y) S.T. aforementioned other constraints on z).
     Using the facts that:
      - MSE(z,y) < =\|z-y\|_{\ell^\infty}
      - f(x) := x^{a/b} + C*x is an increasing bijection (0,\infty)\to(0,\infty)
      - f^{-1}(x) is thus also an increasing bijection (0,\infty)\to(0,\infty)
-    We obtain dual_max <= f(opt) from the first two facts,
+    We obtain lb_on_min <= f(opt) from the first two facts,
     where we introduce opt := \min_z(|z-y\|_{\ell^\infty}^{a/b} S.T. aforementioned other constraints on z)
-    and finally dual_max <= f(opt) \implies f^{-1}(dual_max) <= opt thanks to the last fact.
-    Therefore, this function returns f^{-1}(dual_max).
+    and finally lb_on_min <= f(opt) \implies f^{-1}(lb_on_min) <= opt thanks to the last fact.
+    Therefore, this function returns f^{-1}(lb_on_min).
     """
-    if dual_max <= 0: return 0.
-    f = lambda t: t**(a/b) + mse_penalty*t**2 - dual_max    # ~~~ which we will solve for a lower bound t on |y-z|_{\ell^\infty}
-    lower_bound_on_primal = dual_max**(b/a) if mse_penalty==0 else root_scalar( f=f, bracket=[0,upper_bound_on_primal] ).root
+    if lb_on_min <= 0: return 0.
+    f = lambda t: t**(a/b) + mse_penalty*t**2 - lb_on_min    # ~~~ which we will solve for a lower bound t on |y-z|_{\ell^\infty}
+    lower_bound_on_primal = lb_on_min**(b/a) if mse_penalty==0 else root_scalar( f=f, bracket=[0,upper_bound_on_primal] ).root
     msg = f"The supposed lower bound {lower_bound_on_primal} on the primal min is larger than the supplied upper bound {upper_bound_on_primal} (this is mathematically incorrect, implying something is awry)."
     if lower_bound_on_primal > upper_bound_on_primal:
         if hard_fail: raise RuntimeError(msg)
@@ -153,7 +153,7 @@ class DualSpline(spline):
         H_o =  (1/m)*np.eye(m)                if not weighted_mean else  cp.diag(w)
         c_o = -(1/m)*self.y.cpu().numpy()     if not weighted_mean else -cp.multiply( w, self.y.cpu().numpy() )
         d_o =  (1/m)*(self.y**2).sum().item() if not weighted_mean else  cp.sum(cp.multiply( w, self.y.cpu().numpy()**2 ))
-        problem, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, constraints=constraints, **kwargs )
+        problem, _, z = mcu.solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, constraints=constraints, **kwargs )
         #
         # ~~~ Process results
         self.z.data = torch.from_numpy(z)
@@ -165,7 +165,71 @@ class DualSpline(spline):
         return dual_max
     #
     # ~~~ Same as the above, but with more options that I experimented with (including both eqations (9) and (10) from the paper as special cases)
-    def solve_dual_of_mse_minimization_with_more_options( self, *args, mse_penalty=0, t_squared_objective=False, t_squared_constraint=False, breakpoint_reg=0, non_negative_epigraph=True, weighted_mean=False, z_squared_constraint=True, **kwargs ):
+    def solve_dual_of_mse_minimization_with_more_options(
+                self,
+                *args,
+                mse_penalty           = 0,
+                t_squared_objective   = False,
+                t_squared_constraint  = False,
+                breakpoint_reg        = 0,
+                non_negative_epigraph = True,
+                weighted_mean         = False,
+                z_squared_constraint  = True,
+                **kwargs
+            ):
+        return self.the_kitchen_sink(
+                *args,
+                mse_penalty           = mse_penalty,
+                t_squared_objective   = t_squared_objective,
+                t_squared_constraint  = t_squared_constraint,
+                breakpoint_reg        = breakpoint_reg,
+                non_negative_epigraph = non_negative_epigraph,
+                weighted_mean         = weighted_mean,
+                z_squared_constraint  = z_squared_constraint,
+                method                = "solve_dual_of_QCQP",
+                **kwargs
+            )
+    #
+    # ~~~ Instead of solving the dual, solve the semi-definite relaxation (this approach is particular to QCQP's, whereas the dual program is much more general)
+    def solve_rank_relaxation_of_mse_minimization_with_options(
+                self,
+                *args,
+                mse_penalty           = 0,
+                t_squared_objective   = False,
+                t_squared_constraint  = False,
+                breakpoint_reg        = 0,
+                non_negative_epigraph = True,
+                weighted_mean         = False,
+                z_squared_constraint  = True,
+                **kwargs
+            ):
+        return self.the_kitchen_sink(
+                *args,
+                mse_penalty           = mse_penalty,
+                t_squared_objective   = t_squared_objective,
+                t_squared_constraint  = t_squared_constraint,
+                breakpoint_reg        = breakpoint_reg,
+                non_negative_epigraph = non_negative_epigraph,
+                weighted_mean         = weighted_mean,
+                z_squared_constraint  = z_squared_constraint,
+                method                = "solve_rank_relaxation_of_QCQP",
+                **kwargs
+            )
+    #
+    # ~~~ Highly general wrapper that includes *many* different solvers as special cases
+    def the_kitchen_sink(
+                self,
+                *args,
+                mse_penalty           = 0,
+                t_squared_objective   = False,
+                t_squared_constraint  = False,
+                breakpoint_reg        = 0,
+                non_negative_epigraph = True,
+                weighted_mean         = False,
+                z_squared_constraint  = True,
+                method,
+                **kwargs
+            ):
         #
         # ~~~ Setup
         if t_squared_constraint and not (t_squared_objective or non_negative_epigraph): my_warn("Minimizing t subject to |y_j-z_j|^2 <= t^2 ain't good...")
@@ -237,13 +301,12 @@ class DualSpline(spline):
             d_I = np.concatenate([ d_I, [0.] ])
         #
         # ~~~ Solve the problem and process the results
-        problem, _, zt = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, constraints=constraints, **kwargs )
+        self.problem, _, zt = getattr(mcu,method)( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, constraints=constraints, **kwargs )
         self.z.data = torch.from_numpy(zt[:-1])
-        self.problem = problem
         self.project()
         self.update_upper_bound_on_primal()
         lower_bound = deduce_lower_bound_on_ERM(
-                dual_max = problem.objective.value,
+                lb_on_min = self.problem.objective.value,
                 mse_penalty = mse_penalty,
                 a = t_squared_objective + 1,
                 b = b,
@@ -252,55 +315,8 @@ class DualSpline(spline):
         self.lower_bound_on_primal = max( self.lower_bound_on_primal, lower_bound )
         return lower_bound
     #
-    # ~~~ Solve a semi-definite relaxation of the dual problem
-    def ell_infty_rank_relaxation( self, *args, **kwargs ):
-        aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
-        m = len(self.y)
-        H_o = np.zeros(( m+1, m+1 ))
-        c_o = np.array( m*[0.] + [1.] )
-        d_o = 0.
-        H_I = np.concatenate([
-                np.pad( aat_minus_bbt, ( (0,0), (0,1), (0,1) ) ),   # ~~~ pad the "actual constraints" with zero for the epigraph variable
-                np.stack([ np.diag( j*[0.] + [1.] + (m-j-1)*[0.] + [-1.] ) for j in range(m)  ])
-            ])
-        c_I = np.vstack([
-                np.zeros(( self.k-1, m+1 )),
-                np.hstack(( np.diag(-self.y.cpu().numpy().flatten()), np.zeros((m,1)) ))
-            ])
-        d_I = np.concatenate([
-                np.zeros(self.k-1),
-                self.y.cpu().numpy().flatten()**2
-            ])
-        _, X, x = solve_rank_relaxation_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
-        self.z.data = torch.from_numpy(x[:-1])
-    #
-    # ~~~ Generic function that calls the appropriate one of the preceding methods
-    def solve_dual_for_z( self, *args, mse_penalty=1, epigraph_constraint=None, epigraph_objective=None, **kwargs ):
-        #
-        # ~~~ Three constraints are possible
-        allowed_epigraph_constraints = ("linear", "quadratic")
-        if not epigraph_constraint in allowed_epigraph_constraints:
-            raise ValueError(f"epigraph_constraint must be one of {allowed_epigraph_constraints}")
-        #
-        # ~~~ Three objectives are possible
-        allowed_epigraph_objectives = ("linear", "quadratic")
-        if not epigraph_objective in allowed_epigraph_objectives:
-            raise ValueError(f"epigraph_objectives must be one of {allowed_epigraph_objectives}")
-        #
-        # ~~~ Solve the dual of max norm minimization in epigraph form, possibly also penalizing MSE in the objective function
-        if epigraph_constraint == "linear":
-            self.S_Lemma_2( *args, mse_penalty=mse_penalty, t_squared_objective=(epigraph_objective=="quadratic") **kwargs )
-        else:
-            self.S_Lemma_1( *args, mse_penalty=mse_penalty, t_squared_objective=(epigraph_objective=="quadratic") **kwargs )
-        #
-        # ~~~ Diagnostics
-        with torch.no_grad():
-            worst_offender = self.compute_violation().min().item()
-            if worst_offender<1:
-                my_warn(f"The approximate primal solution fails to define an element of V (error is roughly {1-worst_offender}). If a primal solution is desired, try specifying a slightly larger (but still very small) value for the argument `breakpoint_reg` (default is 0)")
-    #
-    # ~~~ Minimize the constant function 1 subject to \|z-y\|_2^2<=noise and (a[i].T@z)**2 - (b[i].T@z)**2 <= 0
-    def S_Lemma_4( self, noise=0.1, *args, **kwargs  ):
+    # ~~~ Cursory implementation of yet another option: minimizing some meaningless function subject to \|z-y\|_2^2<=noise and (a[i].T@z)**2 - (b[i].T@z)**2 <= 0
+    def solve_dual_of_quadratic_feasibility_program( self, noise=0.1, *args, **kwargs  ):
         #
         # ~~~ Set the objective function to be identically equal to 1.
         m = len(self.y)
@@ -315,7 +331,7 @@ class DualSpline(spline):
         d_I = (self.k-1)*[0.] + [ (self.y.cpu()**2).mean().numpy() - noise ]
         #
         # ~~~ Solve the dual
-        _, _, z = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        self.problem, _, z = mcu.solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         self.z.data = torch.from_numpy(z)
     #
     # ~~~ Minimize t+mse_penalty*MSE(y,z) subject to |s_jx + c_j - y| \leq t for both data pairs (x,y), for j=1,...,k, and subject to p_j(s_1,...,s_k,c_1,...,c_k) \leq 0
@@ -409,7 +425,7 @@ class DualSpline(spline):
                 d_I[ k-1+m+index_2j_minus_i ] = training_label
         #
         # ~~~ Solve the dual
-        problem, _, s_c_t = solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
+        problem, _, s_c_t = mcu.solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         s, c, t = np.array_split( s_c_t, [k,2*k] )
         for j in range(k):
             for i in [1,0]:
