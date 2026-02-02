@@ -639,11 +639,6 @@ if __name__ == "__main__":
         nodes = v.compute_break_points()
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
     plt.show()
-    my_s = np.zeros(k)
-    my_c = np.zeros(k)
-    for j in range(k):
-        my_s[j] = (v.z[2*(j+1)-2] - v.z[2*(j+1)-1]) / (x_train[2*(j+1)-2] - x_train[2*(j+1)-1])
-        my_c[j] = v.z[2*(j+1)-1] - my_s[j]*x_train[2*(j+1)-1]
     # #
     # # ~~~ Try taking that as the initialization for a ReLU network
     # from near_optimal.PGD_univar import RigorousNet
@@ -694,7 +689,7 @@ if __name__ == "__main__":
             nn.ReLU(),
             nn.Linear(40,1),
         )
-    ocassional_model = nn.Sequential(
+    occasional_model = nn.Sequential(
             nn.Unflatten( dim=-1, unflattened_size=(-1,1) ),
             nn.Linear(1,40),
             nn.ReLU(),
@@ -705,7 +700,7 @@ if __name__ == "__main__":
     # gif = GifMaker()
     optimizer = torch.optim.Adam( model.parameters(), lr=1e-2 )
     big_optimizer = torch.optim.Adam( big_model.parameters(), lr=1e-2 )
-    ocassional_optimizer = torch.optim.Adam( ocassional_model.parameters(), lr=1e-2 )
+    occasional_optimizer = torch.optim.Adam( occasional_model.parameters(), lr=1e-2 )
     with support_for_progress_bars():
         for epoch in trange(10000):
             loss = (( model(x_train).flatten() - y_train )**2).mean()
@@ -713,23 +708,23 @@ if __name__ == "__main__":
             big_loss = (( big_model(x_train).flatten() - y_train )**2).mean()
             big_loss.backward()
             if epoch % 10 == 0:
-                ocassional_loss = (( ocassional_model(x_train).flatten() - y_train )**2).mean()
-                ocassional_loss.backward()
-            for opt in ( optimizer, big_optimizer, ocassional_optimizer ):
+                occasional_loss = (( occasional_model(x_train).flatten() - y_train )**2).mean()
+                occasional_loss.backward()
+            for opt in ( optimizer, big_optimizer, occasional_optimizer ):
                 opt.step()
                 opt.zero_grad()
     fig, ax = points_with_curves(
             x = x_train,
             y = y_train,
             marker_size  = 6,  # ~~~ size of the scatter plot
-            curves       = ( big_model, ocassional_model, v,        f       ),
+            curves       = ( big_model, occasional_model, v,        f       ),
             curve_colors = ( "black",   "grey",           "blue",   "green" ),
             curve_marks  = [ "-",       "-",              "-",      "--"    ],
             curve_labels = ( "Large Network Trained with ADAM", "Large Network Trained with ADAM and Early Stopping", "Small Network Trained with Our Method", "Ideal Fit" ),
             ylim = [-1.1,1.1],
-            figsize = (8,4),
+            figsize = (12,6),
             show = False,
-            title = "Comparison of Our Model with ADAM and Larger Neural Networks",
+            title = r"Comparison Between Our Model ($\widehat{C}\approx$" + f"{suboptimality_ratio:.1f}, in blue, {2+2*(k-1)} parameters) versus Larger Networks Trained using ADAM ({sum( p.numel() for p in big_model.parameters() )} parameters)",
             model_fit = False  # ~~~ deactivate default settings
         )
     handles, labels = plt.gca().get_legend_handles_labels()
@@ -742,8 +737,8 @@ if __name__ == "__main__":
         by_label[label] = (handle, line_style)  # Store handle and line style
     legend_handles = [by_label[label][0] for label in by_label]
     legend_labels = [f"{label}" for label in by_label]  # Include line style in label
-    plt.legend( legend_handles, legend_labels, fontsize=8.2, )
-    # plt.savefig(dpi=400)
+    plt.legend( legend_handles, legend_labels, fontsize=8.2, loc="upper right" )
+    plt.savefig( "jmlr_fig", dpi=400 )
     plt.show()
     #
     # ~~~ Finer option
