@@ -9,11 +9,12 @@ Recall that the paper suggests two main algorithms:
  - Solving the dual of a quadratic program
 
 For an initial viewing of the code, I think the easiest thing to digest is a minimal demo of the former:
-__PLEASE SEE [this colab demo](https://colab.research.google.com/drive/1C6Xgo9C-U-ZTcxDtap7I44Ao-Pd785Fq?usp=sharing)__
+__PLEASE SEE [this colab demo](https://colab.research.google.com/drive/1C6Xgo9C-U-ZTcxDtap7I44Ao-Pd785Fq?usp=sharing)__.
 
-
-After that, I turn you loose to inspect the codebase, which includes many experiments that lead nowhere and are not sufficiently docummented.
 A demo of the latter can be found in `quadratic_univar.py`.
+
+You are free to inspect the codebase, which includes many experiments that lead nowhere and are not sufficiently docummented.
+
 
 # Installation
 
