@@ -355,15 +355,15 @@ class DualSpline(spline):
                 j -= 1  # ~~~ return to 0-based indexing
                 #
                 # ~~~ Add (mse_penalty/m)*( s_j*x_{2j-i} + c_j - y_{2j-i} )^2 to the objective function
-                evaluation_site = self.x[index_2j_minus_i].item() + M   # ~~~ == x_{2j-i} + M
-                training_label  = self.y[index_2j_minus_i].item()       # ~~~ == y_{2j-i}
-                H_o[j,j] += (mse_penalty/m) * evaluation_site**2    # ~~~ (mse_penalty/m) * x_{2j-i}^2 * s_j^2
-                H_o[k+j,j] += (mse_penalty/m) * evaluation_site
-                H_o[j,k+j] += (mse_penalty/m) * evaluation_site
-                H_o[k+j,k+j] += mse_penalty/m                       # ~~~ (mse_penalty/m) * c_j^2
-                c_o[j] -= (mse_penalty/m) * training_label * evaluation_site    # ~~~ -2(mse_penalty/m) * x_{2j-i} * y_{2j-i} * s_j
-                c_o[k+j] -= (mse_penalty/m) * training_label                    # ~~~ -2(mse_penalty/m) * y_{2j-i} * c_j
-                d_o += (mse_penalty/m) * training_label**2     # ~~~ y_{2j-i}^2
+                evaluation_site  = self.x[index_2j_minus_i].item() + M  # ~~~ == x_{2j-i} + M
+                training_label   = self.y[index_2j_minus_i].item()      # ~~~ == y_{2j-i}
+                H_o[j,j]        += (mse_penalty/m) * evaluation_site**2 # ~~~ (mse_penalty/m) * x_{2j-i}^2 * s_j^2
+                H_o[k+j,j]      += (mse_penalty/m) * evaluation_site
+                H_o[j,k+j]      += (mse_penalty/m) * evaluation_site
+                H_o[k+j,k+j]    += mse_penalty/m                        # ~~~ (mse_penalty/m) * c_j^2
+                c_o[j]          -= (mse_penalty/m) * training_label * evaluation_site   # ~~~ -2(mse_penalty/m) * x_{2j-i} * y_{2j-i} * s_j
+                c_o[k+j]        -= (mse_penalty/m) * training_label     # ~~~ -2(mse_penalty/m) * y_{2j-i} * c_j
+                d_o             += (mse_penalty/m) * training_label**2  # ~~~ y_{2j-i}^2
         #
         # ~~~ Safety feature
         for j in range(k-1):
@@ -378,7 +378,7 @@ class DualSpline(spline):
         for j in range(k-1):
             j += 1  # ~~~ use 1-based indexing j=1,...,k-1
             delta_over_2 = (self.x[(2*j)-1] - self.x[(2*j-1)-1]).item()/2           # ~~~ == (x_{2j} - x_{2j-1})/2
-            shifted_midpoint = (self.x[(2*j+1)-1] + self.x[(2*j)-1]).item()/2 + M   # ~~~ == (x_{2j+1} + x_{2j})/2 + M
+            shifted_midpoint = 1 #(self.x[(2*j+1)-1] + self.x[(2*j)-1]).item()/2 + M   # ~~~ == (x_{2j+1} + x_{2j})/2 + M
             j -= 1  # ~~~ return to 0-based indexing
             A = 1 - (delta_over_2/shifted_midpoint)**2
             H_I[ j, j, j ]     =  A
@@ -416,13 +416,13 @@ class DualSpline(spline):
                 c_I[ k-1+index_2j_minus_i, j   ] = (evaluation_site+M)/2
                 c_I[ k-1+index_2j_minus_i, k+j ] = 1/2
                 c_I[ k-1+index_2j_minus_i, -1  ] = -1/2
-                d_I[ k-1+index_2j_minus_i ] = -training_label
+                d_I[ k-1+index_2j_minus_i ]      = -training_label
                 #
                 # ~~~ Add the constraint -s_j*(x+M) - c_j + y - t \leq 0
                 c_I[ k-1+m+index_2j_minus_i, j   ] = -(evaluation_site+M)/2
                 c_I[ k-1+m+index_2j_minus_i, k+j ] = -1/2
                 c_I[ k-1+m+index_2j_minus_i, -1  ] = -1/2
-                d_I[ k-1+m+index_2j_minus_i ] = training_label
+                d_I[ k-1+m+index_2j_minus_i ]      = training_label
         #
         # ~~~ Solve the dual
         problem, _, s_c_t = mcu.solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
