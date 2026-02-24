@@ -7,7 +7,7 @@ from setuptools import setup, find_packages
 
 setup(
     name = 'near_optimal',
-    version = '0.12.0',
+    version = '0.13.0',
     url = 'https://github.com/ThomasLastName/near-optimal',
     author = 'Thomas Winckelman',
     author_email = 'winckelman@tamu.edu',
@@ -23,5 +23,5 @@ setup(
             "seaborn",
             "tqdm",
             "torch",
-            "quality_of_life @ git+https://github.com/ThomasLastName/quality-of-life.git"
+            "quality_of_life @ git+https://github.com/ThomasLastName/quality-of-life.git"   # >=2.16.3
         ])

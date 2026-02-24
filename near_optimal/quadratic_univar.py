@@ -434,7 +434,7 @@ if __name__ == "__main__":
     # ~~~ Solve using the S-lemma
     b_star = v.solve_dual_of_mse_minimization(weighted_mean=True)
     if N is None:
-        val = v.solve_dual_of_mse_minimization( solver="SCS", eps=1e-6 )
+        val = v.solve_dual_of_mse_minimization( solver="SCS", eps_abs=1e-7, eps_rel=1e-7, eps_infeas=1e-10 )
         best_z = v.z.data.clone()
     if N is not None:
         best_error = float("inf")
@@ -547,8 +547,9 @@ if __name__ == "__main__":
             marker_size  = 6,  # ~~~ size of the scatter plot
             curves       = ( big_model, occasional_model, v,        f       ),
             curve_colors = ( "black",   "grey",           "blue",   "green" ),
-            curve_marks  = [ "-",       "-",              "-",      "--"    ],
+            curve_marks  = [ "--",      (0,(5,5)),         "-",      ":"    ],
             curve_labels = ( "Large Network Trained with ADAM", "Large Network Trained with ADAM and Early Stopping", "Small Network Trained with Our Method", "Ideal Fit" ),
+            curve_thicknesses = ( 1.25, 1.25, 1.25, 1.25 ),
             ylim = [-1.1,1.1],
             figsize = (12,6),
             show = False,
@@ -570,7 +571,7 @@ if __name__ == "__main__":
     plt.show()
     #
     # ~~~ Finer option
-    v.solve_dual_of_mse_minimization_with_more_options(mse_penalty=1)
+    v.solve_dual_of_mse_minimization_with_more_options( mse_penalty=1, eps_abs=1e-7, eps_rel=1e-7, eps_infeas=1e-10 )
     with torch.no_grad(): pred = v(x_train)
     new_max_abs_error = (pred-y_train).abs().max().item()
     new_mean_sq_error = ((pred-y_train)**2).mean().item()
