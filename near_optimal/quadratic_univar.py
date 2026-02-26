@@ -136,7 +136,7 @@ class DualSpline(spline):
                     self.best_z = self.z.data.clone()
     #
     # ~~~ Solve the dual problem of "minimize MSE(z,y) subject to (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 for all i = 1,...,k-1"
-    def solve_dual_of_mse_minimization( self, *args, breakpoint_reg=0., weighted_mean=False, **kwargs ):    # ~~~ originally had an `mse_penalty` argument but, empirically, that appeared to have no effect
+    def solve_dual_of_mse_minimization( self, breakpoint_reg=0., weighted_mean=False, tol=1e-7  ):    # ~~~ originally had an `mse_penalty` argument but, empirically, that appeared to have no effect
         #
         # ~~~ Setup
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
@@ -153,7 +153,7 @@ class DualSpline(spline):
         H_o =  (1/m)*np.eye(m)                if not weighted_mean else  cp.diag(w)
         c_o = -(1/m)*self.y.cpu().numpy()     if not weighted_mean else -cp.multiply( w, self.y.cpu().numpy() )
         d_o =  (1/m)*(self.y**2).sum().item() if not weighted_mean else  cp.sum(cp.multiply( w, self.y.cpu().numpy()**2 ))
-        problem, _, z = mcu.solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, constraints=constraints, **kwargs )
+        problem, _, z = mcu.solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], constraints=constraints, solver="SCS", eps_abs=tol, eps_rel=tol, eps_infeas=tol/1000  )
         #
         # ~~~ Process results
         self.z.data = torch.from_numpy(z)
@@ -399,9 +399,10 @@ torch.manual_seed(2025)
 torch.set_default_dtype(torch.double)
 k = 15
 m =  2*k
-f = lambda x: torch.sin(2*torch.pi*x)
+f = lambda x: torch.sin(2*torch.pi*x)*(1-torch.exp(-x**2)) # ~~~ a bit contrived, yes, but only in the interest of giving a rich example
 noise_level = 0.1
 x_train = torch.linspace(-1,1,m)
+x_train = x_train.sign() * x_train.abs().sqrt() # ~~~ make the problem harder by inducing a gap in the middle of the data
 y_train = f(x_train) + noise_level*torch.randn_like(x_train)
 x_test = torch.linspace(-1,1,1001)
 y_test = f(x_test)
@@ -434,7 +435,7 @@ if __name__ == "__main__":
     # ~~~ Solve using the S-lemma
     b_star = v.solve_dual_of_mse_minimization(weighted_mean=True)
     if N is None:
-        val = v.solve_dual_of_mse_minimization( solver="SCS", eps_abs=1e-7, eps_rel=1e-7, eps_infeas=1e-10 )
+        val = v.solve_dual_of_mse_minimization()
         best_z = v.z.data.clone()
     if N is not None:
         best_error = float("inf")
@@ -535,7 +536,7 @@ if __name__ == "__main__":
             loss.backward()
             big_loss = (( big_model(x_train).flatten() - y_train )**2).mean()
             big_loss.backward()
-            if epoch % 10 == 0:
+            if epoch % 100 == 0: # ~~~ I'm willing to call this "early stopping" because I did a coarse manual grid search ( % 10, % 20, etc. ) which is equivalent to testing multiple checkpoints and choosing the best one
                 occasional_loss = (( occasional_model(x_train).flatten() - y_train )**2).mean()
                 occasional_loss.backward()
             for opt in ( optimizer, big_optimizer, occasional_optimizer ):
@@ -548,36 +549,26 @@ if __name__ == "__main__":
             curves       = ( big_model, occasional_model, v,        f       ),
             curve_colors = ( "black",   "grey",           "blue",   "green" ),
             curve_marks  = [ "--",      (0,(5,5)),         "-",      ":"    ],
-            curve_labels = ( "Large Network Trained with ADAM", "Large Network Trained with ADAM and Early Stopping", "Small Network Trained with Our Method", "Ideal Fit" ),
+            curve_labels = ( "Large Network Trained with ADAM", "Large Network Trained with ADAM and Early Stopping", "Small Network Trained with Our Method", r"$f$" ),
             curve_thicknesses = ( 1.25, 1.25, 1.25, 1.25 ),
-            ylim = [-1.1,1.1],
+            ylim = [-.75,.75],
             figsize = (12,6),
             show = False,
             title = r"Comparison Between Our Model ($\widehat{C}\approx$" + f"{suboptimality_ratio:.1f}, in blue, {2+2*(k-1)} parameters) versus Larger Networks Trained using ADAM ({sum( p.numel() for p in big_model.parameters() )} parameters)",
             model_fit = False  # ~~~ deactivate default settings
         )
-    handles, labels = plt.gca().get_legend_handles_labels()
-    unique_labels = list(set(labels))  # Get unique labels
-    by_label = {}   # Create a dictionary to store handles and line styles for each unique label
-    for label in unique_labels:
-        indices = [i for i, x in enumerate(labels) if x == label]  # Find indices for each label
-        handle = handles[indices[0]]  # Get the handle for the first occurrence of the label
-        line_style = handle.get_linestyle()  # Get the line style
-        by_label[label] = (handle, line_style)  # Store handle and line style
-    legend_handles = [by_label[label][0] for label in by_label]
-    legend_labels = [f"{label}" for label in by_label]  # Include line style in label
-    plt.legend( legend_handles, legend_labels, fontsize=8.2, loc="upper right" )
+    ax.legend( fontsize=14, title_fontsize=16, markerscale=1.5, loc="upper right" )
     plt.savefig( "jmlr_fig", dpi=400 )
     plt.show()
     #
     # ~~~ Finer option
-    v.solve_dual_of_mse_minimization_with_more_options( mse_penalty=1, eps_abs=1e-7, eps_rel=1e-7, eps_infeas=1e-10 )
+    v.solve_dual_of_mse_minimization_with_more_options( mse_penalty=1, eps_abs=1e-8, eps_rel=1e-8, eps_infeas=1e-11 )
     with torch.no_grad(): pred = v(x_train)
     new_max_abs_error = (pred-y_train).abs().max().item()
     new_mean_sq_error = ((pred-y_train)**2).mean().item()
     new_suboptimality_ratio = new_max_abs_error/b_star
     print("")
-    print('The "Slightly more Refined Quadratic Program" may be considered "better" depending on the following stats....')
+    print('The "Slightly more Refined Quadratic Program" may or may not be "better" depending on the following stats....')
     print(f"   mean sq error {'down' if new_mean_sq_error<mean_sq_error else 'up'} from {mean_sq_error} to {new_mean_sq_error}")
     print(f"   max abs error {'down' if new_max_abs_error<max_abs_error else 'up'} from {max_abs_error} to {new_max_abs_error} (this is the one our theory cares about)")
     print(f"   sub-optimality ratio {'down' if new_suboptimality_ratio<suboptimality_ratio else 'up'} from {suboptimality_ratio} to {new_suboptimality_ratio} (anything <2 is good)")
