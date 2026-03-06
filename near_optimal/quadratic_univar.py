@@ -135,6 +135,16 @@ class DualSpline(spline):
                     self.upper_bound_on_primal = current_upper_bound
                     self.best_z = self.z.data.clone()
     #
+    # ~~~ Basic fit
+    def fit(self):
+        b_star = self.solve_dual_of_mse_minimization(weighted_mean=True)
+        self.solve_dual_of_mse_minimization()
+        with torch.no_grad(): pred = self(x_train)
+        max_abs_error = (pred-y_train).abs().max().item()
+        print("")
+        print(f"    Sub-optimality ratio: {max_abs_error/b_star}")
+        print("")
+    #
     # ~~~ Solve the dual problem of "minimize MSE(z,y) subject to (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 for all i = 1,...,k-1"
     def solve_dual_of_mse_minimization( self, breakpoint_reg=0., weighted_mean=False, tol=1e-7  ):    # ~~~ originally had an `mse_penalty` argument but, empirically, that appeared to have no effect
         #
