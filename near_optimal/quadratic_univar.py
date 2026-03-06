@@ -11,7 +11,7 @@ from scipy.sparse.linalg import eigsh
 from scipy.optimize import root_scalar
 from tqdm.auto import tqdm, trange
 from matplotlib import pyplot as plt
-from quality_of_life.my_plt_utils import points_with_curves
+from quality_of_life.my_plt_utils import points_with_curves, GifMaker
 from quality_of_life.my_base_utils import support_for_progress_bars, my_warn
 from quality_of_life import my_cvx_utils as mcu
 
@@ -345,7 +345,7 @@ class DualSpline(spline):
         self.z.data = torch.from_numpy(z)
     #
     # ~~~ 
-    def PGD_step(self):
+    def PGD_step( self, tol=1e-4 ):
         #
         # ~~~ Compute the gradient of F(\lambda)
         self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
@@ -363,7 +363,7 @@ class DualSpline(spline):
         R = sum(s[i] * bbt_minus_aat[i] for i in range(self.k-1))
         constraints = [
                 s >= 0,
-                R << (1-self.eps)*np.eye(2*self.k)
+                R << (1-tol)*np.eye(2*self.k)
             ]
         problem = cp.Problem( objective, constraints )
         problem.solve()
@@ -371,7 +371,7 @@ class DualSpline(spline):
         return objective_before_update.detach().cpu().item()
     #
     # ~~~ 
-    def frank_wolfe_step(self):
+    def frank_wolfe_step( self, tol=1e-4 ):
         #
         # ~~~ Compute the gradient of F(\lambda)
         self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
@@ -387,8 +387,8 @@ class DualSpline(spline):
         bbt_minus_aat = self.bbt_minus_aat.cpu().numpy()
         R = sum(s[i] * bbt_minus_aat[i] for i in range(self.k-1))
         constraints = [
-                s >= self.eps,
-                R << (1-self.eps)*np.eye(2*self.k)
+                s >= tol,
+                R << (1-tol)*np.eye(2*self.k)
             ]
         problem = cp.Problem(objective, constraints)
         duality_gap = problem.solve()/self.lr
@@ -421,26 +421,27 @@ if __name__ == "__main__":
     v = DualSpline( x_train, y_train )
     N = None
     noise = None
-    # #
-    # # ~~~ Try gradient descent on the problem \min_z \max_\ell -\langle z,a_\ell \rangle*\langle z,b_\ell \rangle subject to \|z-y\|_\infty \leq \eta
-    # v.ell_infty_projection(eta=noise)
-    # optimizer = torch.optim.Adam( v.parameters(), lr=1e-3 )
-    # gif = GifMaker()
-    # fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False )
-    # gif.capture()
-    # with support_for_progress_bars():
-    #     for _ in tqdm(range(2000)):
-    #         predictions = v.z   # == v(x_train)
-    #         loss = ( (v.a@predictions)**2 - (v.b@predictions)**2 ).max()
-    #         loss.backward()
-    #         optimizer.step()
-    #         optimizer.zero_grad()
-    #         v.ell_infty_projection(eta=noise)
-    #         if (_+1)%10==0:
-    #             fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False, fig=fig, ax=ax )
-    #             gif.capture()
-    #     fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", fig=fig, ax=ax, show=False )
-    #     gif.develop()
+    if noise:
+        #
+        # ~~~ Try gradient descent on the problem \min_z \max_\ell -\langle z,a_\ell \rangle*\langle z,b_\ell \rangle subject to \|z-y\|_\infty \leq \eta
+        v.ell_infty_projection(eta=noise)
+        optimizer = torch.optim.Adam( v.parameters(), lr=1e-3 )
+        gif = GifMaker()
+        fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False )
+        gif.capture()
+        with support_for_progress_bars():
+            for _ in tqdm(range(200)):
+                predictions = v.z   # == v(x_train)
+                loss = ( (v.a@predictions)**2 - (v.b@predictions)**2 ).max()
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                v.ell_infty_projection(eta=noise)
+                if (_+1)%10==0:
+                    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False, fig=fig, ax=ax )
+                    gif.capture()
+            fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", fig=fig, ax=ax, show=False )
+            gif.develop()
     #
     # ~~~ Solve using the S-lemma
     b_star = v.solve_dual_of_mse_minimization(weighted_mean=True)
@@ -450,7 +451,7 @@ if __name__ == "__main__":
     if N is not None:
         best_error = float("inf")
         with support_for_progress_bars():
-            pbar = tqdm( desc="Solving the Dual Problem Using Frank-Wolfe", total=N, ascii=' >=' )
+            pbar = tqdm( desc="Solving Dual by Frank-Wolfe", total=N, ascii=' >=' )
             for _ in range(N):
                 F, duality_gap = v.frank_wolfe_step()
                 _ = pbar.update()
@@ -478,42 +479,8 @@ if __name__ == "__main__":
         nodes = v.compute_break_points()
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
     plt.show()
-    # #
-    # # ~~~ Try taking that as the initialization for a ReLU network
-    # from near_optimal.PGD_univar import RigorousNet
-    # v = RigorousNet(x_train)
-    # with torch.no_grad():
-    #     slopes = (best_z[1::2] - best_z[::2]) / (x_train[1::2] - x_train[::2])
-    #     v.relu_net[0].bias.data = -nodes.reshape(v.relu_net[0].bias.data.shape)
-    #     v.a.data = slopes[0]
-    #     v.relu_net[-1].weight.data = slopes.diff().reshape(v.relu_net[-1].weight.data.shape)
-    #     v.relu_net[-1].bias.fill_( best_z[0] - slopes[0]*x_train[0] )
-    # fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), show=False, title="MSE Minimization Subject to Constraints on the Location of Breakpoints" )
-    # with torch.no_grad():
-    #     ax.scatter( nodes, v(nodes.reshape(-1,1)), color="blue", alpha=0.4 )
-    # plt.show()
-    # #
-    # # ~~~ Train it
-    # optimizer = torch.optim.Adam( v.parameters(), lr=1e-2 )
-    # x_train_vertical = x_train.reshape(-1,1)
-    # gif = GifMaker()
-    # fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", show=False )  
-    # gif.capture()
-    # with support_for_progress_bars():
-    #     for _ in trange(10000):
-    #         predictinons = v(x_train_vertical)
-    #         max_error = (y_train-predictinons).abs().max()
-    #         max_error.backward()
-    #         optimizer.step()
-    #         optimizer.zero_grad()
-    #         v.project()
-    #         if (_+1)%100:
-    #             fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", show=False, fig=fig, ax=ax )
-    #             gif.capture()
-    #     points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", fig=fig, ax=ax )
-    #     gif.develop()
     #
-    # ~~~ Train a neural net for comparison
+    # ~~~ Train a conventional neural net for comparison
     model = nn.Sequential(
             nn.Unflatten( dim=-1, unflattened_size=(-1,1) ),
             nn.Linear(1,k-1),
