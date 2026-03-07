@@ -11,7 +11,7 @@ from scipy.sparse.linalg import eigsh
 from scipy.optimize import root_scalar
 from tqdm.auto import tqdm, trange
 from matplotlib import pyplot as plt
-from quality_of_life.my_plt_utils import points_with_curves
+from quality_of_life.my_plt_utils import points_with_curves, GifMaker
 from quality_of_life.my_base_utils import support_for_progress_bars, my_warn
 from quality_of_life import my_cvx_utils as mcu
 
@@ -136,8 +136,18 @@ class DualSpline(spline):
                     self.upper_bound_on_primal = current_upper_bound
                     self.best_z = self.z.data.clone()
     #
+    # ~~~ Basic fit
+    def fit(self):
+        b_star = self.solve_dual_of_mse_minimization(weighted_mean=True)
+        self.solve_dual_of_mse_minimization()
+        with torch.no_grad(): pred = self(x_train)
+        max_abs_error = (pred-y_train).abs().max().item()
+        print("")
+        print(f"    Sub-optimality ratio: {max_abs_error/b_star}")
+        print("")
+    #
     # ~~~ Solve the dual problem of "minimize MSE(z,y) subject to (a[i].T@z)**2 - (b[i].T@z)**2 + breakpoint_reg <= 0 for all i = 1,...,k-1"
-    def solve_dual_of_mse_minimization( self, *args, breakpoint_reg=0., weighted_mean=False, **kwargs ):    # ~~~ originally had an `mse_penalty` argument but, empirically, that appeared to have no effect
+    def solve_dual_of_mse_minimization( self, breakpoint_reg=0., weighted_mean=False, tol=1e-7  ):    # ~~~ originally had an `mse_penalty` argument but, empirically, that appeared to have no effect
         #
         # ~~~ Setup
         aat_minus_bbt = -self.bbt_minus_aat.cpu().numpy()   # ~~~ shape (self.k-1, 2*self.k, 2*self.k)
@@ -154,7 +164,7 @@ class DualSpline(spline):
         H_o =  (1/m)*np.eye(m)                if not weighted_mean else  cp.diag(w)
         c_o = -(1/m)*self.y.cpu().numpy()     if not weighted_mean else -cp.multiply( w, self.y.cpu().numpy() )
         d_o =  (1/m)*(self.y**2).sum().item() if not weighted_mean else  cp.sum(cp.multiply( w, self.y.cpu().numpy()**2 ))
-        problem, _, z = mcu.solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], *args, constraints=constraints, **kwargs )
+        problem, _, z = mcu.solve_dual_of_QCQP( H_o, c_o, d_o, H_I=aat_minus_bbt, c_I=(self.k-1)*[np.zeros(m)], d_I=(self.k-1)*[breakpoint_reg], constraints=constraints, solver="SCS", eps_abs=tol, eps_rel=tol, eps_infeas=tol/1000  )
         #
         # ~~~ Process results
         self.z.data = torch.from_numpy(z)
@@ -333,180 +343,8 @@ class DualSpline(spline):
         self.problem, _, z = mcu.solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
         self.z.data = torch.from_numpy(z)
     #
-    # ~~~ Minimize t+mse_penalty*MSE(y,z) subject to |s_jx + c_j - y| \leq t for both data pairs (x,y), for j=1,...,k, and subject to p_j(s_1,...,s_k,c_1,...,c_k) \leq 0
-    def D_kappa( self, *args, M=0, kappa=0, mse_penalty=0, t_squared_objective=True, announce_eigenvalues=True, **kwargs ):
-        #
-        # ~~~ Define objects of the correct size
-        k = self.k
-        m = len(self.y)
-        H_o = np.diag(np.concatenate([ np.zeros(m), [1. if t_squared_objective else 0.] ])) #np.zeros((m+1,m+1))
-        c_o = np.concatenate([ np.zeros(m), [0. if t_squared_objective else 1/2] ]) #np.array( 2*k*[0.] + [1/2] )
-        d_o = 0
-        H_I = np.zeros(( k-1+2*m, 2*k+1, 2*k+1 ))
-        c_I = np.zeros(( k-1+2*m, 2*k+1 ))
-        d_I = np.zeros( k-1+2*m )
-        #
-        # ~~~ Penalize MSE
-        for j in range(k):
-            for i in [1,0]:
-                j += 1  # ~~~ use 1-based indexing j=1,...,k
-                index_2j_minus_i = (2*j-i)-1
-                j -= 1  # ~~~ return to 0-based indexing
-                #
-                # ~~~ Add (mse_penalty/m)*( s_j*x_{2j-i} + c_j - y_{2j-i} )^2 to the objective function
-                evaluation_site = self.x[index_2j_minus_i].item() + M   # ~~~ == x_{2j-i} + M
-                training_label  = self.y[index_2j_minus_i].item()       # ~~~ == y_{2j-i}
-                H_o[j,j] += (mse_penalty/m) * evaluation_site**2    # ~~~ (mse_penalty/m) * x_{2j-i}^2 * s_j^2
-                H_o[k+j,j] += (mse_penalty/m) * evaluation_site
-                H_o[j,k+j] += (mse_penalty/m) * evaluation_site
-                H_o[k+j,k+j] += mse_penalty/m                       # ~~~ (mse_penalty/m) * c_j^2
-                c_o[j] -= (mse_penalty/m) * training_label * evaluation_site    # ~~~ -2(mse_penalty/m) * x_{2j-i} * y_{2j-i} * s_j
-                c_o[k+j] -= (mse_penalty/m) * training_label                    # ~~~ -2(mse_penalty/m) * y_{2j-i} * c_j
-                d_o += (mse_penalty/m) * training_label**2     # ~~~ y_{2j-i}^2
-        #
-        # ~~~ Safety feature
-        for j in range(k-1):
-            j += 1  # ~~~ use 1-based indexing j=1,...,k-1
-            delta_over_2 = (self.x[(2*j)-1] - self.x[(2*j-1)-1])/2          # ~~~ == (x_{2j} - x_{2j-1})/2
-            shifted_midpoint = (self.x[(2*j+1)-1] + self.x[(2*j)-1])/2 + M  # ~~~ == (x_{2j+1} + x_{2j})/2 + M
-            if abs(shifted_midpoint) < 1e-8:
-                my_warn("A midpoint of the shifted data is approximately zero. Consider toggling the value of M.")
-                break
-        #
-        # ~~~ Build the "actual constraints," i.e., the constraints on the locations of breakpoints
-        for j in range(k-1):
-            j += 1  # ~~~ use 1-based indexing j=1,...,k-1
-            delta_over_2 = (self.x[(2*j)-1] - self.x[(2*j-1)-1]).item()/2           # ~~~ == (x_{2j} - x_{2j-1})/2
-            shifted_midpoint = (self.x[(2*j+1)-1] + self.x[(2*j)-1]).item()/2 + M   # ~~~ == (x_{2j+1} + x_{2j})/2 + M
-            j -= 1  # ~~~ return to 0-based indexing
-            A = 1 - (delta_over_2/shifted_midpoint)**2
-            H_I[ j, j, j ]     =  A
-            H_I[ j, j, j+1 ]   = -A
-            H_I[ j, j+1, j ]   = -A
-            H_I[ j, j+1, j+1 ] =  A
-            B = 1/shifted_midpoint
-            H_I[ j, j, k+j ]     =  B
-            H_I[ j, j, k+j+1 ]   = -B
-            H_I[ j, j+1, k+j ]   = -B
-            H_I[ j, j+1, k+j+1 ] =  B
-            H_I[ j, k+j, j ]     =  B
-            H_I[ j, k+j+1, j ]   = -B
-            H_I[ j, k+j, j+1 ]   = -B
-            H_I[ j, k+j+1, j+1 ] =  B
-            C = 1/shifted_midpoint**2
-            H_I[ j, k+j, k+j ]     =  C
-            H_I[ j, k+j, k+j+1 ]   = -C
-            H_I[ j, k+j+1, k+j ]   = -C
-            H_I[ j, k+j+1, k+j+1 ] =  C
-            smallest_eigenvalue, corresponding_eigenvector = eigsh( H_I[j,:,:], k=1, which='SA' )
-            H_I[ j, :, : ] += kappa*smallest_eigenvalue*np.eye(2*k+1)
-            if announce_eigenvalues: print(f"The Hessian of quadratic constraint {j+1}/{k-1} has smallest eigenvalue {smallest_eigenvalue[0]}.")
-        #
-        # ~~~ Build the epigraph constraints
-        for j in range(k):
-            for i in [1,0]:
-                j += 1  # ~~~ use 1-based indexing j=1,...,k
-                index_2j_minus_i = (2*j-i)-1
-                j -= 1  # ~~~ return to 0-based indexing
-                #
-                # ~~~ Add the constraint s_j*(x+M) + c_j - y - t \leq 0
-                evaluation_site = self.x[index_2j_minus_i].item()  # ~~~ == x_{2j-i}
-                training_label  = self.y[index_2j_minus_i].item()  # ~~~ == y_{2j-i}
-                c_I[ k-1+index_2j_minus_i, j   ] = (evaluation_site+M)/2
-                c_I[ k-1+index_2j_minus_i, k+j ] = 1/2
-                c_I[ k-1+index_2j_minus_i, -1  ] = -1/2
-                d_I[ k-1+index_2j_minus_i ] = -training_label
-                #
-                # ~~~ Add the constraint -s_j*(x+M) - c_j + y - t \leq 0
-                c_I[ k-1+m+index_2j_minus_i, j   ] = -(evaluation_site+M)/2
-                c_I[ k-1+m+index_2j_minus_i, k+j ] = -1/2
-                c_I[ k-1+m+index_2j_minus_i, -1  ] = -1/2
-                d_I[ k-1+m+index_2j_minus_i ] = training_label
-        #
-        # ~~~ Solve the dual
-        problem, _, s_c_t = mcu.solve_dual_of_QCQP( H_o, c_o, d_o, H_I=H_I, c_I=c_I, d_I=d_I, *args, **kwargs )
-        s, c, t = np.array_split( s_c_t, [k,2*k] )
-        for j in range(k):
-            for i in [1,0]:
-                j += 1  # ~~~ use 1-based indexing j=1,...,k
-                appropriate_index = (2*j-i)-1
-                j -= 1  # ~~~ return to 0-based indexing
-                with torch.no_grad(): self.z.data[appropriate_index] = s[j]*self.x[appropriate_index] + c[j]
-        return np.sqrt(abs(problem.objective.value)) if t_squared_objective else problem.objective.value
-    #
-    # ~~~ Minimize t+mse_penalty*MSE(y,z) subject to |s_jx + c_j - y| \leq t for both data pairs (x,y), for j=1,...,k, and subject to p_j(s_1,...,c_k) + \kappa\|s_1,...,s_k\|^2 \leq 0 which is equivalent to (s_1,...,c_k) lying in the eigenspace of p_j's Hessian's smallest eigenvalue, which we enforce as a linear equality constraint
-    def P_kappa_1( self, *args, M=0, mse_penalty=0, t_squared_objective=False, announce_eigenvalues=True, **kwargs ):
-        #
-        # ~~~ Define objects of the correct size
-        k = self.k
-        s = cp.Variable(k)
-        c = cp.Variable(k)
-        t = cp.Variable()
-        alpha = cp.Variable(k-1)
-        epigraph_objective = t**2 if t_squared_objective else t
-        constraints = []
-        #
-        # ~~~ Safety feature
-        for j in range(k-1):
-            j += 1  # ~~~ use 1-based indexing j=1,...,k-1
-            delta_over_2 = (self.x[(2*j)-1] - self.x[(2*j-1)-1]).item()/2           # ~~~ == (x_{2j} - x_{2j-1})/2
-            shifted_midpoint = (self.x[(2*j+1)-1] + self.x[(2*j)-1]).item()/2 + M   # ~~~ == (x_{2j+1} + x_{2j})/2 + M
-            if abs(shifted_midpoint) < 1e-8:
-                my_warn("A midpoint of the shifted data is approximately zero. Consider toggling the value of M.")
-                break
-        #
-        # ~~~ Build the "actual constraints"
-        for j in range(k-1):
-            j += 1  # ~~~ use 1-based indexing j=1,...,k-1
-            delta_over_2 = (self.x[(2*j)-1] - self.x[(2*j-1)-1]).item()/2           # ~~~ == (x_{2j} - x_{2j-1})/2
-            shifted_midpoint = (self.x[(2*j+1)-1] + self.x[(2*j)-1]).item()/2 + M   # ~~~ == (x_{2j+1} + x_{2j})/2 + M
-            j -= 1  # ~~~ return to 0-based indexing
-            A = 1 - (delta_over_2/shifted_midpoint)**2
-            B = 1/shifted_midpoint
-            C = 1/shifted_midpoint**2
-            H = np.array([
-                    [  A, -A,  B, -B ],
-                    [ -A,  A, -B,  B ],
-                    [  B, -B,  C, -C ],
-                    [ -B,  B, -C,  C ]
-                ])
-            smallest_eigenvalue, corresponding_eigenvector = eigsh( H, k=1, which='SA' )
-            corresponding_eigenvector = corresponding_eigenvector.flatten()
-            if announce_eigenvalues: print(f"The Hessian of quadratic constraint {j+1}/{k-1} has smallest eigenvalue {smallest_eigenvalue[0]}.")
-            constraints += [
-                s[j]   == alpha[j]*corresponding_eigenvector[0],
-                s[j+1] == alpha[j]*corresponding_eigenvector[1],
-                c[j]   == alpha[j]*corresponding_eigenvector[2],
-                c[j+1] == alpha[j]*corresponding_eigenvector[3]
-            ]
-        #
-        # ~~~ Build the epigraph constraints
-        for j in range(k):
-            for i in [1,0]:
-                j += 1  # ~~~ use 1-based indexing j=1,...,k
-                index_2j_minus_i = (2*j-i)-1
-                j -= 1  # ~~~ return to 0-based indexing
-                evaluation_site = self.x[index_2j_minus_i].item()  # ~~~ == x_{2j-i}
-                training_label  = self.y[index_2j_minus_i].item()  # ~~~ == y_{2j-i}
-                error = s[j]*(evaluation_site+M) + c[j] - training_label
-                #
-                # ~~~ Add the constraint s_j*(x+M) + c_j - y - t \leq 0
-                constraints.append( error - t <= 0 )
-                #
-                # ~~~ Add the constraint -s_j*(x+M) - c_j + y - t \leq 0                
-                constraints.append( -error - t <= 0 )
-                #
-                # ~~~ If penalizing the MSE, add this error squared to the objective
-                if mse_penalty>0: epigraph_objective += (mse_penalty/m)*error**2
-        #
-        # ~~~ Solve it
-        objective = cp.Minimize( epigraph_objective )
-        problem = cp.Problem( objective, constraints )
-        problem.solve( *args, **kwargs )
-        return problem
-    #
     # ~~~ 
-    def PGD_step(self):
+    def PGD_step( self, tol=1e-4 ):
         #
         # ~~~ Compute the gradient of F(\lambda)
         self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
@@ -524,7 +362,7 @@ class DualSpline(spline):
         R = sum(s[i] * bbt_minus_aat[i] for i in range(self.k-1))
         constraints = [
                 s >= 0,
-                R << (1-self.eps)*np.eye(2*self.k)
+                R << (1-tol)*np.eye(2*self.k)
             ]
         problem = cp.Problem( objective, constraints )
         problem.solve()
@@ -532,7 +370,7 @@ class DualSpline(spline):
         return objective_before_update.detach().cpu().item()
     #
     # ~~~ 
-    def frank_wolfe_step(self):
+    def frank_wolfe_step( self, tol=1e-4 ):
         #
         # ~~~ Compute the gradient of F(\lambda)
         self.Q = torch.ones_like(self.y).diag() - (self.lamb.reshape(-1,1,1)*self.bbt_minus_aat).sum(dim=0) # ~~~ Q(\lambda) = I - \sum_{j=1}^{k-1} \lambda_j (b_j b_j^T - a_j a_j^T)
@@ -548,8 +386,8 @@ class DualSpline(spline):
         bbt_minus_aat = self.bbt_minus_aat.cpu().numpy()
         R = sum(s[i] * bbt_minus_aat[i] for i in range(self.k-1))
         constraints = [
-                s >= self.eps,
-                R << (1-self.eps)*np.eye(2*self.k)
+                s >= tol,
+                R << (1-tol)*np.eye(2*self.k)
             ]
         problem = cp.Problem(objective, constraints)
         duality_gap = problem.solve()/self.lr
@@ -570,9 +408,10 @@ torch.manual_seed(2025)
 torch.set_default_dtype(torch.double)
 k = 15
 m =  2*k
-f = lambda x: torch.sin(2*torch.pi*x)
+f = lambda x: torch.sin(2*torch.pi*x)*(1-torch.exp(-x**2)) # ~~~ a bit contrived, yes, but only in the interest of giving a rich example
 noise_level = 0.1
 x_train = torch.linspace(-1,1,m)
+x_train = x_train.sign() * x_train.abs().sqrt() # ~~~ make the problem harder by inducing a gap in the middle of the data
 y_train = f(x_train) + noise_level*torch.randn_like(x_train)
 x_test = torch.linspace(-1,1,1001)
 y_test = f(x_test)
@@ -581,36 +420,37 @@ if __name__ == "__main__":
     v = DualSpline( x_train, y_train )
     N = None
     noise = None
-    # #
-    # # ~~~ Try gradient descent on the problem \min_z \max_\ell -\langle z,a_\ell \rangle*\langle z,b_\ell \rangle subject to \|z-y\|_\infty \leq \eta
-    # v.ell_infty_projection(eta=noise)
-    # optimizer = torch.optim.Adam( v.parameters(), lr=1e-3 )
-    # gif = GifMaker()
-    # fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False )
-    # gif.capture()
-    # with support_for_progress_bars():
-    #     for _ in tqdm(range(2000)):
-    #         predictions = v.z   # == v(x_train)
-    #         loss = ( (v.a@predictions)**2 - (v.b@predictions)**2 ).max()
-    #         loss.backward()
-    #         optimizer.step()
-    #         optimizer.zero_grad()
-    #         v.ell_infty_projection(eta=noise)
-    #         if (_+1)%10==0:
-    #             fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False, fig=fig, ax=ax )
-    #             gif.capture()
-    #     fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", fig=fig, ax=ax, show=False )
-    #     gif.develop()
+    if noise:
+        #
+        # ~~~ Try gradient descent on the problem \min_z \max_\ell -\langle z,a_\ell \rangle*\langle z,b_\ell \rangle subject to \|z-y\|_\infty \leq \eta
+        v.ell_infty_projection(eta=noise)
+        optimizer = torch.optim.Adam( v.parameters(), lr=1e-3 )
+        gif = GifMaker()
+        fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False )
+        gif.capture()
+        with support_for_progress_bars():
+            for _ in tqdm(range(200)):
+                predictions = v.z   # == v(x_train)
+                loss = ( (v.a@predictions)**2 - (v.b@predictions)**2 ).max()
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
+                v.ell_infty_projection(eta=noise)
+                if (_+1)%10==0:
+                    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", show=False, fig=fig, ax=ax )
+                    gif.capture()
+            fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), title="Minimize the Violation Subject to an \ell^\infty Constraint", fig=fig, ax=ax, show=False )
+            gif.develop()
     #
     # ~~~ Solve using the S-lemma
     b_star = v.solve_dual_of_mse_minimization(weighted_mean=True)
     if N is None:
-        val = v.solve_dual_of_mse_minimization( solver="SCS", eps=1e-6 )
+        val = v.solve_dual_of_mse_minimization()
         best_z = v.z.data.clone()
     if N is not None:
         best_error = float("inf")
         with support_for_progress_bars():
-            pbar = tqdm( desc="Solving the Dual Problem Using Frank-Wolfe", total=N, ascii=' >=' )
+            pbar = tqdm( desc="Solving Dual by Frank-Wolfe", total=N, ascii=' >=' )
             for _ in range(N):
                 F, duality_gap = v.frank_wolfe_step()
                 _ = pbar.update()
@@ -638,47 +478,8 @@ if __name__ == "__main__":
         nodes = v.compute_break_points()
         ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
     plt.show()
-    my_s = np.zeros(k)
-    my_c = np.zeros(k)
-    for j in range(k):
-        my_s[j] = (v.z[2*(j+1)-2] - v.z[2*(j+1)-1]) / (x_train[2*(j+1)-2] - x_train[2*(j+1)-1])
-        my_c[j] = v.z[2*(j+1)-1] - my_s[j]*x_train[2*(j+1)-1]
-    # #
-    # # ~~~ Try taking that as the initialization for a ReLU network
-    # from near_optimal.PGD_univar import RigorousNet
-    # v = RigorousNet(x_train)
-    # with torch.no_grad():
-    #     slopes = (best_z[1::2] - best_z[::2]) / (x_train[1::2] - x_train[::2])
-    #     v.relu_net[0].bias.data = -nodes.reshape(v.relu_net[0].bias.data.shape)
-    #     v.a.data = slopes[0]
-    #     v.relu_net[-1].weight.data = slopes.diff().reshape(v.relu_net[-1].weight.data.shape)
-    #     v.relu_net[-1].bias.fill_( best_z[0] - slopes[0]*x_train[0] )
-    # fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), show=False, title="MSE Minimization Subject to Constraints on the Location of Breakpoints" )
-    # with torch.no_grad():
-    #     ax.scatter( nodes, v(nodes.reshape(-1,1)), color="blue", alpha=0.4 )
-    # plt.show()
-    # #
-    # # ~~~ Train it
-    # optimizer = torch.optim.Adam( v.parameters(), lr=1e-2 )
-    # x_train_vertical = x_train.reshape(-1,1)
-    # gif = GifMaker()
-    # fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", show=False )  
-    # gif.capture()
-    # with support_for_progress_bars():
-    #     for _ in trange(10000):
-    #         predictinons = v(x_train_vertical)
-    #         max_error = (y_train-predictinons).abs().max()
-    #         max_error.backward()
-    #         optimizer.step()
-    #         optimizer.zero_grad()
-    #         v.project()
-    #         if (_+1)%100:
-    #             fig, ax = points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", show=False, fig=fig, ax=ax )
-    #             gif.capture()
-    #     points_with_curves( x=x_train, y=y_train, grid=torch.linspace(-1,1,501).reshape(-1,1), curves=(v,f), title="MSE Minimization Subject to Constraints on the Location of Breakpoints", fig=fig, ax=ax )
-    #     gif.develop()
     #
-    # ~~~ Train a neural net for comparison
+    # ~~~ Train a conventional neural net for comparison
     model = nn.Sequential(
             nn.Unflatten( dim=-1, unflattened_size=(-1,1) ),
             nn.Linear(1,k-1),
@@ -693,7 +494,7 @@ if __name__ == "__main__":
             nn.ReLU(),
             nn.Linear(40,1),
         )
-    ocassional_model = nn.Sequential(
+    occasional_model = nn.Sequential(
             nn.Unflatten( dim=-1, unflattened_size=(-1,1) ),
             nn.Linear(1,40),
             nn.ReLU(),
@@ -704,55 +505,46 @@ if __name__ == "__main__":
     # gif = GifMaker()
     optimizer = torch.optim.Adam( model.parameters(), lr=1e-2 )
     big_optimizer = torch.optim.Adam( big_model.parameters(), lr=1e-2 )
-    ocassional_optimizer = torch.optim.Adam( ocassional_model.parameters(), lr=1e-2 )
+    occasional_optimizer = torch.optim.Adam( occasional_model.parameters(), lr=1e-2 )
     with support_for_progress_bars():
         for epoch in trange(10000):
             loss = (( model(x_train).flatten() - y_train )**2).mean()
             loss.backward()
             big_loss = (( big_model(x_train).flatten() - y_train )**2).mean()
             big_loss.backward()
-            if epoch % 10 == 0:
-                ocassional_loss = (( ocassional_model(x_train).flatten() - y_train )**2).mean()
-                ocassional_loss.backward()
-            for opt in ( optimizer, big_optimizer, ocassional_optimizer ):
+            if epoch % 100 == 0: # ~~~ I'm willing to call this "early stopping" because I did a coarse manual grid search ( % 10, % 20, etc. ) which is equivalent to testing multiple checkpoints and choosing the best one
+                occasional_loss = (( occasional_model(x_train).flatten() - y_train )**2).mean()
+                occasional_loss.backward()
+            for opt in ( optimizer, big_optimizer, occasional_optimizer ):
                 opt.step()
                 opt.zero_grad()
     fig, ax = points_with_curves(
             x = x_train,
             y = y_train,
             marker_size  = 6,  # ~~~ size of the scatter plot
-            curves       = ( big_model, ocassional_model, v,        f       ),
+            curves       = ( big_model, occasional_model, v,        f       ),
             curve_colors = ( "black",   "grey",           "blue",   "green" ),
-            curve_marks  = [ "-",       "-",              "-",      "--"    ],
-            curve_labels = ( "Large Network Trained with ADAM", "Large Network Trained with ADAM and Early Stopping", "Small Network Trained with Our Method", "Ideal Fit" ),
-            ylim = [-1.1,1.1],
-            figsize = (8,4),
+            curve_marks  = [ "--",      (0,(5,5)),         "-",      ":"    ],
+            curve_labels = ( "Large Network Trained with ADAM", "Large Network Trained with ADAM and Early Stopping", "Small Network Trained with Our Method", r"$f$" ),
+            curve_thicknesses = ( 1.25, 1.25, 1.25, 1.25 ),
+            ylim = [-.75,.75],
+            figsize = (12,6),
             show = False,
-            title = "Comparison of Our Model with ADAM and Larger Neural Networks",
+            title = r"Comparison Between Our Model ($\widehat{C}\approx$" + f"{suboptimality_ratio:.1f}, in blue, {2+2*(k-1)} parameters) versus Larger Networks Trained using ADAM ({sum( p.numel() for p in big_model.parameters() )} parameters)",
             model_fit = False  # ~~~ deactivate default settings
         )
-    handles, labels = plt.gca().get_legend_handles_labels()
-    unique_labels = list(set(labels))  # Get unique labels
-    by_label = {}   # Create a dictionary to store handles and line styles for each unique label
-    for label in unique_labels:
-        indices = [i for i, x in enumerate(labels) if x == label]  # Find indices for each label
-        handle = handles[indices[0]]  # Get the handle for the first occurrence of the label
-        line_style = handle.get_linestyle()  # Get the line style
-        by_label[label] = (handle, line_style)  # Store handle and line style
-    legend_handles = [by_label[label][0] for label in by_label]
-    legend_labels = [f"{label}" for label in by_label]  # Include line style in label
-    plt.legend( legend_handles, legend_labels, fontsize=8.2, )
-    # plt.savefig(dpi=400)
+    ax.legend( fontsize=14, title_fontsize=16, markerscale=1.5, loc="upper right" )
+    plt.savefig( "jmlr_fig", dpi=400 )
     plt.show()
     #
     # ~~~ Finer option
-    v.solve_dual_of_mse_minimization_with_more_options(mse_penalty=1)
+    v.solve_dual_of_mse_minimization_with_more_options( mse_penalty=1, eps_abs=1e-8, eps_rel=1e-8, eps_infeas=1e-11 )
     with torch.no_grad(): pred = v(x_train)
     new_max_abs_error = (pred-y_train).abs().max().item()
     new_mean_sq_error = ((pred-y_train)**2).mean().item()
     new_suboptimality_ratio = new_max_abs_error/b_star
     print("")
-    print('The "Slightly more Refined Quadratic Program" may be considered "better" depending on the following stats....')
+    print('The "Slightly more Refined Quadratic Program" may or may not be "better" depending on the following stats....')
     print(f"   mean sq error {'down' if new_mean_sq_error<mean_sq_error else 'up'} from {mean_sq_error} to {new_mean_sq_error}")
     print(f"   max abs error {'down' if new_max_abs_error<max_abs_error else 'up'} from {max_abs_error} to {new_max_abs_error} (this is the one our theory cares about)")
     print(f"   sub-optimality ratio {'down' if new_suboptimality_ratio<suboptimality_ratio else 'up'} from {suboptimality_ratio} to {new_suboptimality_ratio} (anything <2 is good)")

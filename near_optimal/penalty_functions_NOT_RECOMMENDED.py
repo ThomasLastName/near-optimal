@@ -53,6 +53,20 @@ class spline(nn.Module):
         self.D = D
         self.z = nn.Parameter( torch.randn_like(x) if y is None else torch.clone(y) )   # ~~~ note: I think of self.z as being self(self.x), but mathematically, that's only true when the constraint is satisfied
         self.compute_slopes_and_intercepts()
+        self.compute_eta(verbose=True)
+    #
+    # ~~~ Compute eta
+    def compute_eta( self, verbose=False ):
+        delta = self.x[1::2]-self.x[::2]
+        outer = self.x[2::2] - self.x[1:-1:2]
+        Delta = torch.maximum( outer[:-1], outer[1:] )
+        eta = 1 + 2*(Delta/delta[1:-1]).max().item()
+        self.eta = eta
+        if verbose:
+            print("")
+            print(f"    eta={self.eta}")
+            print("")
+        return eta
     #
     # ~~~ Compute the thing that we want to be \geq 1
     def compute_violation( self, tol=1e-10 ):
