@@ -61,7 +61,7 @@ def build_a_j(x,j):
 
 #
 # ~~~ Solve t^{a/b} + mse_penalty*t**2 == lb_on_min for t... from minimizing t^a + mse_penalty*MSE subject to |y-z|_{\ell^\infty} \leq t^b
-def deduce_lower_bound_on_ERM( lb_on_min, mse_penalty, a, b, upper_bound_on_primal, hard_fail=False ):
+def deduce_lower_bound_on_ERM( lb_on_min, mse_penalty, a, b, upper_bound_on_primal=None, hard_fail=False ):
     """
     Assume "lb_on_min" is a lower bound on "min_{z,t}( t^a + C*MSE(z,y) S.T. \|z-y\|_{\ell^\infty} \leq t^b and other constraints on z)"
     Notice that we have \|z-y\|_{\ell^\infty}==t^b at the optimum. Then, t^a==(t^b)^{a/b}==\|z-y\|_{\ell^\infty}^{b/a}, and so
@@ -79,13 +79,14 @@ def deduce_lower_bound_on_ERM( lb_on_min, mse_penalty, a, b, upper_bound_on_prim
     f = lambda t: t**(a/b) + mse_penalty*t**2 - lb_on_min    # ~~~ which we will solve for a lower bound t on |y-z|_{\ell^\infty}
     lower_bound_on_primal = lb_on_min**(b/a) if mse_penalty==0 else root_scalar( f=f, bracket=[0,upper_bound_on_primal] ).root
     msg = f"The supposed lower bound {lower_bound_on_primal} on the primal min is larger than the supplied upper bound {upper_bound_on_primal} (this is mathematically incorrect, implying something is awry)."
-    if lower_bound_on_primal > upper_bound_on_primal:
-        if hard_fail: raise RuntimeError(msg)
-        else: my_warn(msg)
+    if upper_bound_on_primal is not None:
+        if lower_bound_on_primal > upper_bound_on_primal:
+            if hard_fail: raise RuntimeError(msg)
+            else: my_warn(msg)
     return lower_bound_on_primal
 
 class DualSpline(spline):
-    def __init__( self, x, y, eps=1e-6, lr=1e-2 ):
+    def __init__( self, x, y, lr=1e-2 ):
         super().__init__(x,y)   # ~~~ stores y as self.z
         x = self.x
         self.y = self.z.detach().clone()
@@ -275,7 +276,6 @@ class DualSpline(spline):
                     breakpoint_reg*np.ones(self.k-1),
                     y_np**2
                 ])
-            b = (t_squared_constraint + 1) / 2
         else:
             #
             # ~~~ Simon suggested this instead of the non-convex quadratic epigraph constraint that I was using, as in eq'n (9) in the paper (unless revisions have resulted in this number changing)
@@ -292,7 +292,6 @@ class DualSpline(spline):
                     np.hstack([-np.eye(m), -(not t_squared_constraint)*np.ones((m,1)) ])/2
                 ])
             d_I = np.concatenate([ breakpoint_reg*np.ones(self.k-1), -y_np, y_np ])
-            b = t_squared_constraint + 1
         #
         # ~~~ Optionally, add t >= 0 constraint if desired (I don't think it makes any difference?)
         if non_negative_epigraph:
@@ -309,7 +308,7 @@ class DualSpline(spline):
                 lb_on_min = self.problem.objective.value,
                 mse_penalty = mse_penalty,
                 a = t_squared_objective + 1,
-                b = b,
+                b = (t_squared_constraint + 1) / (z_squared_constraint + 1),
                 upper_bound_on_primal = self.upper_bound_on_primal
             )
         self.lower_bound_on_primal = max( self.lower_bound_on_primal, lower_bound )
