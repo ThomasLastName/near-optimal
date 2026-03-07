@@ -103,7 +103,7 @@ if __name__ == "__main__":
     # ~~~ Test
     breakpoints, z_opt = linear_relaxation(x,y)
     print("")
-    print(f"This minimization problem is too relaxed! The objective value of the relaxed problem is zero (technically, {min(abs(z_opt-y))}) when we know from the other experiments that it be > 0.048.")
+    print(f"This minimization problem is too relaxed! The objective value of the relaxed problem is zero (technically, {min(abs(z_opt-y))}) when we know from the other experiments that it should be > 0.048.")
     print("")
     # for j in range(k-1):
     #     node = breakpoints[j]
