@@ -17,7 +17,7 @@ No obvious improvement over the other methods implemented in `quadratic_univar.p
 """
 
 import torch
-from near_optimal.gradient_univar import spline
+from near_optimal.penalty_functions_NOT_RECOMMENDED import spline
 import numpy as np
 from tqdm.auto import tqdm
 from matplotlib import pyplot as plt

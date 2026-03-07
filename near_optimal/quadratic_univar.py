@@ -4,7 +4,7 @@ Implement the unusual method training method involving quadratic programming
 
 import torch
 from torch import nn
-from near_optimal.gradient_univar import spline
+from near_optimal.penalty_functions_NOT_RECOMMENDED import spline
 import cvxpy as cp
 import numpy as np
 from scipy.sparse.linalg import eigsh

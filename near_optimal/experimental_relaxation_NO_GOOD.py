@@ -21,7 +21,7 @@ import cvxpy as cp
 import torch
 import matplotlib.pyplot as plt
 from quality_of_life.my_plt_utils import points_with_curves
-from near_optimal.gradient_univar import spline
+from near_optimal.penalty_functions_NOT_RECOMMENDED import spline
 from near_optimal.quadratic_univar import x_train, y_train, f, DualSpline
 
 
