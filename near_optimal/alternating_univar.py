@@ -134,7 +134,7 @@ if __name__=="__main__":
     v = RigorousNet( x_train, y_train )
     #
     # ~~~ Train
-    N = 100
+    N = 50
     how_often = 1
     history = []
     fig, ax = points_with_curves( x=x_train,  y=y_train, curves=(v,f), title=r"$\ell^\infty$ Error Minimization with Hard Constraints", show=False )
