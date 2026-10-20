@@ -417,7 +417,6 @@ x_test = torch.linspace(-1,1,1001)
 y_test = f(x_test)
 
 if __name__ == "__main__":
-    from near_optimal.UARS import fit_UARS
     v = DualSpline( x_train, y_train )
     N = None
     noise = None
@@ -532,9 +531,6 @@ if __name__ == "__main__":
         K_mixed = torch.exp(-(dists_mixed/bw)**2/2)
         return K_mixed @ c
     #
-    # ~~~ Use somebody else's implementation of MARS
-    UARS = fit_UARS( x_train.numpy(), y_train.numpy() )
-    #
     # ~~~ Define test error
     def err(model):
         try:
@@ -544,29 +540,61 @@ if __name__ == "__main__":
             y_pred = model(x_test.numpy())
             return np.sqrt(np.mean( ( y_pred - y_test.numpy() )**2 ))
     #
-    # ~~~ Plot it
-    fig, ax = points_with_curves(
-            x = x_train,
-            y = y_train,
-            marker_size  = 6,  # ~~~ size of the scatter plot
-            curves       = ( big_model, occasional_model, gpr_mean, UARS,      v,        f       ),
-            curve_colors = ( "black",   "grey",           "red",    "orange",  "blue",   "green" ),
-            curve_marks  = [ "--",      (0,(5,5)),         "-",     (0,(5,5)), "-",      ":"    ],
-            curve_labels = (
-                    f"Large Network Trained with ADAM (rMSE: {err(big_model):.3f})",
-                    f"Large Network Trained with ADAM and Early Stopping (rMSE: {err(occasional_model):.3f})",
-                    f"Gaussian Process Posterior Mean (rMSE: {err(gpr_mean):.3f})",
-                    f"MARS (rMSE: {err(UARS):.3f})",
-                    f"Small Network Trained with Our Method (rMSE: {err(v):.3f})",
-                    r"$f$"
-                ),
-            curve_thicknesses = ( 1.25, 1.25, 1.25, 1.25, 1.25, 1.25 ),
-            ylim = [-.75,.75],
-            figsize = (12,7),
-            show = False,
-            title = r"Comparison Between Our Model ($\widehat{C}\approx$" + f"{suboptimality_ratio:.1f}, in blue) and Some Alternatives", # {2+2*(k-1)} parameters) and Some Alternatives with More Degrees of Freedom",
-            model_fit = False  # ~~~ deactivate default settings
-        )
-    ax.legend( fontsize=14, title_fontsize=16, markerscale=1.5, loc="upper right" )
-    plt.savefig( "jmlr_fig", dpi=400 )
-    plt.show()
+    # ~~~ Use somebody else's implementation of MARS
+    try:
+        from near_optimal.UARS import fit_UARS
+        UARS = fit_UARS( x_train.numpy(), y_train.numpy() )
+        #
+        # ~~~ Plot it
+        fig, ax = points_with_curves(
+                x = x_train,
+                y = y_train,
+                marker_size  = 6,  # ~~~ size of the scatter plot
+                curves       = ( big_model, occasional_model, gpr_mean, UARS,      v,        f       ),
+                curve_colors = ( "black",   "grey",           "red",    "orange",  "blue",   "green" ),
+                curve_marks  = [ "--",      (0,(5,5)),         "-",     (0,(5,5)), "-",      ":"    ],
+                curve_labels = (
+                        f"Large Network Trained with ADAM (rMSE: {err(big_model):.3f})",
+                        f"Large Network Trained with ADAM and Early Stopping (rMSE: {err(occasional_model):.3f})",
+                        f"Gaussian Process Posterior Mean (rMSE: {err(gpr_mean):.3f})",
+                        f"MARS (rMSE: {err(UARS):.3f})",
+                        f"Small Network Trained with Our Method (rMSE: {err(v):.3f})",
+                        r"$f$"
+                    ),
+                curve_thicknesses = ( 1.25, 1.25, 1.25, 1.25, 1.25, 1.25 ),
+                ylim = [-.75,.75],
+                figsize = (12,7),
+                show = False,
+                title = r"Comparison Between Our Model ($\widehat{C}\approx$" + f"{suboptimality_ratio:.1f}, in blue) and Some Alternatives", # {2+2*(k-1)} parameters) and Some Alternatives with More Degrees of Freedom",
+                model_fit = False  # ~~~ deactivate default settings
+            )
+        ax.legend( fontsize=14, title_fontsize=16, markerscale=1.5, loc="upper right" )
+        plt.savefig( "jmlr_fig", dpi=400 )
+        plt.show()
+    except:
+        #
+        # ~~~ Plot it
+        fig, ax = points_with_curves(
+                x = x_train,
+                y = y_train,
+                marker_size  = 6,  # ~~~ size of the scatter plot
+                curves       = ( big_model, occasional_model, gpr_mean, v,        f       ),
+                curve_colors = ( "black",   "grey",           "red",    "blue",   "green" ),
+                curve_marks  = [ "--",      (0,(5,5)),         "-",     "-",      ":"    ],
+                curve_labels = (
+                        f"Large Network Trained with ADAM (rMSE: {err(big_model):.3f})",
+                        f"Large Network Trained with ADAM and Early Stopping (rMSE: {err(occasional_model):.3f})",
+                        f"Gaussian Process Posterior Mean (rMSE: {err(gpr_mean):.3f})",
+                        f"Small Network Trained with Our Method (rMSE: {err(v):.3f})",
+                        r"$f$"
+                    ),
+                curve_thicknesses = ( 1.25, 1.25, 1.25, 1.25, 1.25 ),
+                ylim = [-.75,.75],
+                figsize = (12,7),
+                show = False,
+                title = r"Comparison Between Our Model ($\widehat{C}\approx$" + f"{suboptimality_ratio:.1f}, in blue) and Some Alternatives", # {2+2*(k-1)} parameters) and Some Alternatives with More Degrees of Freedom",
+                model_fit = False  # ~~~ deactivate default settings
+            )
+        ax.legend( fontsize=14, title_fontsize=16, markerscale=1.5, loc="upper right" )
+        plt.savefig( "jmlr_fig", dpi=400 )
+        plt.show()
