@@ -7,7 +7,7 @@ from setuptools import setup, find_packages
 
 setup(
     name = 'near_optimal',
-    version = '1.0.1',
+    version = '1.1.0',
     url = 'https://github.com/ThomasLastName/near-optimal',
     author = 'Thomas Winckelman',
     author_email = 'winckelman@tamu.edu',
@@ -16,6 +16,7 @@ setup(
     install_requires = [
             "numpy",
             "scipy>=1.6.1",
+            "scikit-learn>=1.6"
             "pandas",
             "cvxpy",
             "SCS",
@@ -23,5 +24,6 @@ setup(
             "seaborn",
             "tqdm",
             "torch",
-            "quality_of_life @ git+https://github.com/ThomasLastName/quality-of-life.git"   # >=2.16.3
+            "quality_of_life @ git+https://github.com/ThomasLastName/quality-of-life.git",  # >=2.16.3
+            "py-earth2 @ git+https://github.com/felixgwilliams/py-earth2.git"
         ])

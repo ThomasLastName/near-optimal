@@ -417,6 +417,7 @@ x_test = torch.linspace(-1,1,1001)
 y_test = f(x_test)
 
 if __name__ == "__main__":
+    from near_optimal.UARS import fit_UARS
     v = DualSpline( x_train, y_train )
     N = None
     noise = None
@@ -518,39 +519,54 @@ if __name__ == "__main__":
             for opt in ( optimizer, big_optimizer, occasional_optimizer ):
                 opt.step()
                 opt.zero_grad()
+    #
+    # ~~~ Do Gaussian process regression (GPR) using accepted, reliable heuristics for the bandwidth and noise parameters
+    x_vert = x_train.reshape(-1,1)
+    dists = torch.cdist( x_vert, x_vert )
+    bw = dists[dists>0].median().item()
+    K = torch.exp(-(dists/bw)**2/2)
+    sigma = 0.01  # ~~~ chosen by ad hoc hyper-parameter tuning
+    c = torch.linalg.inv( K + sigma**2 * torch.eye(m) ) @ y_train
+    def gpr_mean(x):
+        dists_mixed = torch.cdist( x.reshape(-1,1), x_train.reshape(-1,1) )
+        K_mixed = torch.exp(-(dists_mixed/bw)**2/2)
+        return K_mixed @ c
+    #
+    # ~~~ Use somebody else's implementation of MARS
+    UARS = fit_UARS( x_train.numpy(), y_train.numpy() )
+    #
+    # ~~~ Define test error
+    def err(model):
+        try:
+            y_pred = model(x_test).flatten()
+            return torch.sqrt(torch.mean( ( y_pred - y_test )**2 ))
+        except:
+            y_pred = model(x_test.numpy())
+            return np.sqrt(np.mean( ( y_pred - y_test.numpy() )**2 ))
+    #
+    # ~~~ Plot it
     fig, ax = points_with_curves(
             x = x_train,
             y = y_train,
             marker_size  = 6,  # ~~~ size of the scatter plot
-            curves       = ( big_model, occasional_model, v,        f       ),
-            curve_colors = ( "black",   "grey",           "blue",   "green" ),
-            curve_marks  = [ "--",      (0,(5,5)),         "-",      ":"    ],
-            curve_labels = ( "Large Network Trained with ADAM", "Large Network Trained with ADAM and Early Stopping", "Small Network Trained with Our Method", r"$f$" ),
-            curve_thicknesses = ( 1.25, 1.25, 1.25, 1.25 ),
+            curves       = ( big_model, occasional_model, gpr_mean, UARS,      v,        f       ),
+            curve_colors = ( "black",   "grey",           "red",    "orange",  "blue",   "green" ),
+            curve_marks  = [ "--",      (0,(5,5)),         "-",     (0,(5,5)), "-",      ":"    ],
+            curve_labels = (
+                    f"Large Network Trained with ADAM (rMSE: {err(big_model):.3f})",
+                    f"Large Network Trained with ADAM and Early Stopping (rMSE: {err(occasional_model):.3f})",
+                    f"Gaussian Process Posterior Mean (rMSE: {err(gpr_mean):.3f})",
+                    f"MARS (rMSE: {err(UARS):.3f})",
+                    f"Small Network Trained with Our Method (rMSE: {err(v):.3f})",
+                    r"$f$"
+                ),
+            curve_thicknesses = ( 1.25, 1.25, 1.25, 1.25, 1.25, 1.25 ),
             ylim = [-.75,.75],
-            figsize = (12,6),
+            figsize = (12,7),
             show = False,
-            title = r"Comparison Between Our Model ($\widehat{C}\approx$" + f"{suboptimality_ratio:.1f}, in blue, {2+2*(k-1)} parameters) versus Larger Networks Trained using ADAM ({sum( p.numel() for p in big_model.parameters() )} parameters)",
+            title = r"Comparison Between Our Model ($\widehat{C}\approx$" + f"{suboptimality_ratio:.1f}, in blue) and Some Alternatives", # {2+2*(k-1)} parameters) and Some Alternatives with More Degrees of Freedom",
             model_fit = False  # ~~~ deactivate default settings
         )
     ax.legend( fontsize=14, title_fontsize=16, markerscale=1.5, loc="upper right" )
     plt.savefig( "jmlr_fig", dpi=400 )
-    plt.show()
-    #
-    # ~~~ Finer option
-    v.solve_dual_of_mse_minimization_with_more_options( mse_penalty=1, eps_abs=1e-8, eps_rel=1e-8, eps_infeas=1e-11 )
-    with torch.no_grad(): pred = v(x_train)
-    new_max_abs_error = (pred-y_train).abs().max().item()
-    new_mean_sq_error = ((pred-y_train)**2).mean().item()
-    new_suboptimality_ratio = new_max_abs_error/b_star
-    print("")
-    print('The "Slightly more Refined Quadratic Program" may or may not be "better" depending on the following stats....')
-    print(f"   mean sq error {'down' if new_mean_sq_error<mean_sq_error else 'up'} from {mean_sq_error} to {new_mean_sq_error}")
-    print(f"   max abs error {'down' if new_max_abs_error<max_abs_error else 'up'} from {max_abs_error} to {new_max_abs_error} (this is the one our theory cares about)")
-    print(f"   sub-optimality ratio {'down' if new_suboptimality_ratio<suboptimality_ratio else 'up'} from {suboptimality_ratio} to {new_suboptimality_ratio} (anything <2 is good)")
-    print("")
-    fig, ax = points_with_curves( x=x_train, y=y_train, curves=(v,f), show=False, title="Slightly more Refined Quadratic Program (see stdout for stats)" )
-    with torch.no_grad():
-        nodes = v.compute_break_points()
-        ax.scatter( nodes, v(nodes), color="blue", alpha=0.4 )
     plt.show()
